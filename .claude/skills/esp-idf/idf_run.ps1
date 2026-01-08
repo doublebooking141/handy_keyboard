@@ -123,7 +123,7 @@ $logFile = "$logDir\build_$timestamp.log"
 
 # Run command and capture output to file
 $idfPyArgs = @("$IDF_PATH\tools\idf.py") + $command
-$argString = ($idfPyArgs | ForEach-Object { "`"$_`"" }) -join " "
+$argString = $idfPyArgs | ForEach-Object { "`"$_`"" } | Join-String -Separator " "
 $process = Start-Process -FilePath $PythonCommand -ArgumentList $argString -NoNewWindow -PassThru -Wait -RedirectStandardOutput "$logFile.stdout" -RedirectStandardError "$logFile.stderr"
 
 # Merge stdout and stderr into single log file
