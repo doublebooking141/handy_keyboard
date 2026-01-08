@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nadd: speaker test code and clean up unused files\n\n- スピーカー出力テストコード（03.speaker_check）を追加\n  - ES8311コーデックの初期化と設定\n  - I2S経由での音声出力実装\n  - 周波数スイープテスト実装（200Hz-2000Hz）\n  - 注意: 高周波数でデジタルノイズ発生の問題あり（統合アプリで修正予定）\n- ESP-IDFビルド用スクリプト（idf_run.ps1）を追加\n- ビルド成果物用.gitignoreを追加\n- 未使用のテストコード（switchbot_hub2_test, integratedAPPヘッダー）を削除\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+    ]
+  }
+}
