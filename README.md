@@ -23,49 +23,65 @@ JC4880P443C-I-W (ESP32-P4 + ESP32-C6) を使用した多機能ハンディキー
 
 ## 開発環境
 - **ESP-IDF**: v5.5.2
-- **Build System**: Windows (PowerShell via `idf_run.ps1`)
+- **Build System**: Ubuntu (bash + idf.py)
+- **Language**: Rust (esp-idf-hal + LVGL Rust binding)
 - **Version Control**: GitHub
 - **Communication**: ESP-Hosted over SDIO (P4 ↔ C6)
 
 ## ディレクトリ構成
 - `01.docs/`: ドキュメント
   - `hardware/`: ハードウェア仕様・ピン配置
-- `.agents/skills/esp-idf/`: ESP-IDFビルドスクリプト
+- `.claude/skills/esp-idf/`: ESP-IDF スキル定義
 - `03.firmware/`: ファームウェアソースコード
   - `03.speaker_check/`: スピーカー出力テスト
-  - `04.integratedAPP/`: 統合アプリケーション (メイン開発)
+  - `04.integratedAPP/`: 統合アプリケーション (メイン開発、Rust)
 - `04.reference/`: 参考資料 (データシート等)
 
 ## ビルド・実行
 
 ### 前提条件
-1. ESP-IDF v5.5.2がインストール済み
-2. 環境変数 `IDF_ID` が設定済み（例: `esp-idf-b29c58f93b4ca0f49cdfc4c3ef43b562`）
-   - `idf-env config list` で確認可能
+1. ESP-IDF v5.5.2 がインストール済み
+2. Rust + cargo がインストール済み
+3. cargo-espflash がインストール済み（推奨）
 
-### ビルド方法
-`.agents/skills/esp-idf/idf_run.ps1` を使用してビルドします。
+### 環境設定
+```bash
+# ESP-IDF 環境のソース（セッションごとに必要）
+. $HOME/esp/esp-idf/export.sh
 
-```powershell
-# 環境変数設定（初回のみ）
-$env:IDF_ID = "esp-idf-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-
-# スピーカーテストのビルド
-$env:IDF_PROJECT_PATH = "03.firmware/03.speaker_check"
-.\.agents\skills\esp-idf\idf_run.ps1 build
-
-# 統合アプリのビルド
-$env:IDF_PROJECT_PATH = "03.firmware/04.integratedAPP"
-.\.agents\skills\esp-idf\idf_run.ps1 build
-
-# フラッシュ
-.\.agents\skills\esp-idf\idf_run.ps1 flash monitor
+# または ~/.bashrc に追記して自動化
+echo 'alias get_idf=". $HOME/esp/esp-idf/export.sh"' >> ~/.bashrc
 ```
 
-## コーディング規約（統合アプリのみ）
-- **.cファイルは300行程度**を目安として適度に分割
-- **依存関係を整理**してシンプルでメンテナンスしやすい設計
-- **意図のわかりやすい**実装を心がける
+### ビルド方法（Rust統合アプリ）
+```bash
+# プロジェクトディレクトリに移動
+cd 03.firmware/04.integratedAPP
+
+# Cargoでビルド
+cargo build --release
+
+# フラッシュ・モニタ（cargo-espflash使用）
+cargo espflash flash --release --monitor
+
+# またはidf.py経由
+idf.py flash monitor
+```
+
+### C/C++プロジェクト（スピーカーテスト）
+```bash
+# スピーカーテストのビルド
+cd 03.firmware/03.speaker_check
+idf.py build
+
+# フラッシュ・モニタ
+idf.py flash monitor
+```
+
+## コーディング規約（統合アプリ - Rust）
+- **モジュールは適度に分割**してシンプルでメンテナンスしやすい設計
+- **依存関係を整理**して意図のわかりやすい構造に
+- **Rust の慣習に従う**: `cargo fmt`, `cargo clippy` を活用
 - テストコードは**シンプルさを最優先**
 
 ## 既知の問題

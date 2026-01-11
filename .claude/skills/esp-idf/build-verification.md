@@ -1,21 +1,26 @@
 # ESP-IDF Build Verification
 
-ビルドによるコード検証手順。
+ビルドによるコード検証手順（Ubuntu環境）。
 
-## 環境変数
+## 環境準備
 
-IDF_IDは `idf-env config list` で確認できます。
+ESP-IDF環境をソースします：
+```bash
+. $HOME/esp/esp-idf/export.sh
+```
 
 ## 通常ビルド
 
-**統合アプリ:**
+**統合アプリ（Rust）:**
 ```bash
-pwsh -NoProfile -ExecutionPolicy Bypass -Command '$env:IDF_ID="<your-idf-id>"; $env:IDF_PROJECT_PATH="C:\Users\doubl\Desktop\ai_test\handy_keyboard\03.firmware\04.integratedAPP"; $env:IDF_CMD="build"; & "C:\Users\doubl\Desktop\ai_test\handy_keyboard\.claude\skills\esp-idf\idf_run.ps1"'
+cd 03.firmware/04.integratedAPP
+cargo build --release
 ```
 
-**スピーカーテスト:**
+**スピーカーテスト（C）:**
 ```bash
-pwsh -NoProfile -ExecutionPolicy Bypass -Command '$env:IDF_ID="<your-idf-id>"; $env:IDF_PROJECT_PATH="C:\Users\doubl\Desktop\ai_test\handy_keyboard\03.firmware\03.speaker_check"; $env:IDF_CMD="build"; & "C:\Users\doubl\Desktop\ai_test\handy_keyboard\.claude\skills\esp-idf\idf_run.ps1"'
+cd 03.firmware/03.speaker_check
+idf.py build
 ```
 
 ## フルクリーンビルド
@@ -27,34 +32,34 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command '$env:IDF_ID="<your-idf-id>"; $
 - `Kconfig.projbuild`
 - `CMakeLists.txt` (プロジェクトルート)
 - `partitions.csv`
+- `Cargo.toml` (Rustプロジェクト)
 
-**手順（統合アプリの場合）:**
+**手順（統合アプリ - Rustの場合）:**
 
-1. sdkconfig削除（defaultsから再生成させる）
+1. クリーンビルド
    ```bash
-   rm -f "C:\Users\doubl\Desktop\ai_test\handy_keyboard\03.firmware\04.integratedAPP\sdkconfig"
+   cd 03.firmware/04.integratedAPP
+   cargo clean
+   cargo build --release
    ```
 
-2. フルクリーン実行
-   ```bash
-   pwsh -NoProfile -ExecutionPolicy Bypass -Command '$env:IDF_ID="<your-idf-id>"; $env:IDF_PROJECT_PATH="C:\Users\doubl\Desktop\ai_test\handy_keyboard\03.firmware\04.integratedAPP"; $env:IDF_CMD="fullclean"; & "C:\Users\doubl\Desktop\ai_test\handy_keyboard\.claude\skills\esp-idf\idf_run.ps1"'
-   ```
-
-3. ビルド実行（上記の通常ビルドコマンド）
-
-**手順（スピーカーテストの場合）:**
+**手順（スピーカーテスト - Cの場合）:**
 
 1. sdkconfig削除
    ```bash
-   rm -f "C:\Users\doubl\Desktop\ai_test\handy_keyboard\03.firmware\03.speaker_check\sdkconfig"
+   cd 03.firmware/03.speaker_check
+   rm -f sdkconfig
    ```
 
 2. フルクリーン実行
    ```bash
-   pwsh -NoProfile -ExecutionPolicy Bypass -Command '$env:IDF_ID="<your-idf-id>"; $env:IDF_PROJECT_PATH="C:\Users\doubl\Desktop\ai_test\handy_keyboard\03.firmware\03.speaker_check"; $env:IDF_CMD="fullclean"; & "C:\Users\doubl\Desktop\ai_test\handy_keyboard\.claude\skills\esp-idf\idf_run.ps1"'
+   idf.py fullclean
    ```
 
-3. ビルド実行（上記の通常ビルドコマンド）
+3. ビルド実行
+   ```bash
+   idf.py build
+   ```
 
 ## ビルド結果の判定
 

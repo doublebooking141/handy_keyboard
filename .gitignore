@@ -1,1 +1,16 @@
 04.reference/
+
+# Rust build artifacts
+**/target/
+**/Cargo.lock
+
+# ESP-IDF build artifacts
+**/.embuild/
+**/build/
+**/sdkconfig
+**/sdkconfig.old
+
+# Claude Code session data
+.claude/logs/
+.claude/memory/
+.claude/state/
