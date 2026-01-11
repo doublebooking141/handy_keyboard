@@ -1,44 +1,38 @@
 ---
 name: esp-idf
-description: ESP-IDF開発プロジェクトで自動適用。pwsh経由でidf.pyコマンド（build, flash, monitor等）を実行可能。
+description: ESP-IDF開発プロジェクトで自動適用。Ubuntu環境でidf.pyコマンド（build, flash, monitor等）を直接実行可能。
 ---
 
 # ESP-IDF Development Skill
 
-ESP-IDF (Espressif IoT Development Framework) を使用した組み込み開発プロジェクト向けスキル。
-
-## 重要：PowerShellバージョン
-
-**必ず `pwsh` (PowerShell Core 7+) を使用してください。**
-
-- `powershell.exe` (Windows PowerShell 5.1) は**使用禁止**
-- `pwsh` は `Join-String` など新しいコマンドレットをサポート
+ESP-IDF (Espressif IoT Development Framework) を使用した組み込み開発プロジェクト向けスキル（Ubuntu環境）。
 
 ## 環境設定
 
-環境変数は**コマンド実行時に毎回指定**します：
+ESP-IDF環境をソースすることで、idf.pyコマンドが使用可能になります：
 
-- **IDF_ID**: ESP-IDFインストールID（例: `esp-idf-b29c58f93b4ca0f49cdfc4c3ef43b562`）
-  - `idf-env config list` で確認可能
-- **IDF_PROJECT_PATH**: ビルド対象のプロジェクトパス
-  - 統合アプリ: `C:\Users\doubl\Desktop\ai_test\handy_keyboard\03.firmware\04.integratedAPP`
-  - スピーカーテスト: `C:\Users\doubl\Desktop\ai_test\handy_keyboard\03.firmware\03.speaker_check`
+```bash
+# ESP-IDF環境のソース（セッションごとに必要）
+. $HOME/esp/esp-idf/export.sh
+
+# または ~/.bashrc に alias を追加
+echo 'alias get_idf=". $HOME/esp/esp-idf/export.sh"' >> ~/.bashrc
+```
 
 ## idf.pyコマンド実行
 
-**重要**: 必ず `pwsh` を使用すること（`powershell.exe` は不可）
+プロジェクトディレクトリに移動して直接実行します：
 
 ```bash
-pwsh -NoProfile -ExecutionPolicy Bypass -Command '$env:IDF_ID="<your-idf-id>"; $env:IDF_PROJECT_PATH="<project-path>"; $env:IDF_CMD="{COMMAND}"; & "C:\Users\doubl\Desktop\ai_test\handy_keyboard\.claude\skills\esp-idf\idf_run.ps1"'
-```
+# 統合アプリ（Rust）のビルド
+cd 03.firmware/04.integratedAPP
+cargo build --release
+cargo espflash flash --release --monitor
 
-**実行例:**
-```bash
-# 統合アプリのビルド
-pwsh -NoProfile -ExecutionPolicy Bypass -Command '$env:IDF_ID="esp-idf-b29c58f93b4ca0f49cdfc4c3ef43b562"; $env:IDF_PROJECT_PATH="C:\Users\doubl\Desktop\ai_test\handy_keyboard\03.firmware\04.integratedAPP"; $env:IDF_CMD="build"; & "C:\Users\doubl\Desktop\ai_test\handy_keyboard\.claude\skills\esp-idf\idf_run.ps1"'
-
-# スピーカーテストのビルド
-pwsh -NoProfile -ExecutionPolicy Bypass -Command '$env:IDF_ID="esp-idf-b29c58f93b4ca0f49cdfc4c3ef43b562"; $env:IDF_PROJECT_PATH="C:\Users\doubl\Desktop\ai_test\handy_keyboard\03.firmware\03.speaker_check"; $env:IDF_CMD="build"; & "C:\Users\doubl\Desktop\ai_test\handy_keyboard\.claude\skills\esp-idf\idf_run.ps1"'
+# スピーカーテスト（C）のビルド
+cd 03.firmware/03.speaker_check
+idf.py build
+idf.py flash monitor
 ```
 
 ## 実行可能なコマンド
