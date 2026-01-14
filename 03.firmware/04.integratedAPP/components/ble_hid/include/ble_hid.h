@@ -1,0 +1,128 @@
+/**
+ * @file ble_hid.h
+ * @brief BLE HID Keyboard Public API
+ *
+ * Provides BLE HID keyboard functionality via ESP-Hosted + NimBLE.
+ * Supports keyboard reports, consumer control, and Japanese flick input.
+ */
+
+#pragma once
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "esp_err.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief BLE HID connection state
+ */
+typedef enum {
+    BLE_HID_STATE_IDLE,
+    BLE_HID_STATE_ADVERTISING,
+    BLE_HID_STATE_CONNECTED,
+    BLE_HID_STATE_DISCONNECTED,
+} ble_hid_state_t;
+
+/**
+ * @brief BLE HID event callback type
+ */
+typedef void (*ble_hid_event_cb_t)(ble_hid_state_t state);
+
+/**
+ * @brief Initialize BLE HID subsystem
+ *
+ * Initializes ESP-Hosted, NimBLE, and esp_hidd for BLE keyboard functionality.
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_init(void);
+
+/**
+ * @brief Deinitialize BLE HID subsystem
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_deinit(void);
+
+/**
+ * @brief Start BLE advertising
+ *
+ * Makes the device discoverable and connectable.
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_start_advertising(void);
+
+/**
+ * @brief Stop BLE advertising
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_stop_advertising(void);
+
+/**
+ * @brief Send keyboard report
+ *
+ * @param modifiers Modifier keys (Ctrl, Shift, Alt, GUI)
+ * @param keys Array of up to 6 keycodes
+ * @param key_count Number of keys in array
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_send_keyboard(uint8_t modifiers, const uint8_t *keys, size_t key_count);
+
+/**
+ * @brief Send key press and release
+ *
+ * Convenience function to send a single key press followed by release.
+ *
+ * @param modifiers Modifier keys
+ * @param keycode HID keycode
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_send_key(uint8_t modifiers, uint8_t keycode);
+
+/**
+ * @brief Send string as keyboard input
+ *
+ * Sends each character as a key press/release sequence.
+ *
+ * @param str ASCII string to send
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_send_string(const char *str);
+
+/**
+ * @brief Send consumer control report (media keys)
+ *
+ * @param usage Consumer usage code (e.g., volume up/down)
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_send_consumer(uint16_t usage);
+
+/**
+ * @brief Get current BLE HID state
+ *
+ * @return Current connection state
+ */
+ble_hid_state_t ble_hid_get_state(void);
+
+/**
+ * @brief Check if BLE HID is connected
+ *
+ * @return true if connected to a host
+ */
+bool ble_hid_is_connected(void);
+
+/**
+ * @brief Register event callback
+ *
+ * @param cb Callback function
+ */
+void ble_hid_register_callback(ble_hid_event_cb_t cb);
+
+#ifdef __cplusplus
+}
+#endif

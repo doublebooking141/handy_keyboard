@@ -1,0 +1,227 @@
+# =============================================================================
+# Handy Keyboard Firmware - sdkconfig.defaults
+# Target: ESP32-P4 + ESP32-C6 (JC4880P443C-I-W development board)
+# Display: 4.3" 480x800 MIPI-DSI (built-in)
+# =============================================================================
+
+# =============================================================================
+# 1. Target & Core Configuration
+# =============================================================================
+
+CONFIG_IDF_TARGET="esp32p4"
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
+# ESP32-P4 chip revision (v1.0 hardware)
+CONFIG_ESP32P4_REV_MIN_100=y
+CONFIG_ESP32P4_REV_MIN_FULL=100
+CONFIG_ESP32P4_REV_MAX_FULL=199
+
+# Compiler optimization (PERF for low latency keyboard/mouse input)
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Log level
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# =============================================================================
+# 2. Flash & Memory Configuration
+# =============================================================================
+
+# Flash (16MB QIO, Boya chip)
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_SPI_FLASH_SUPPORT_BOYA_CHIP=y
+
+# PSRAM (Octal 200MHz, XIP enabled for code execution from PSRAM)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+
+# L2 Cache (256KB, 128B line)
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+
+# =============================================================================
+# 3. Partition Table
+# =============================================================================
+
+CONFIG_PARTITION_TABLE_TWO_OTA=n
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_PARTITION_TABLE_MD5=y
+
+# =============================================================================
+# 4. USB HID (TinyUSB)
+# =============================================================================
+
+# USB OTG High Speed with Full Speed fallback
+# Interfaces: Boot Keyboard + NKRO Keyboard + Mouse + Consumer Control + Raw HID (future)
+CONFIG_TINYUSB_HID_COUNT=5
+CONFIG_TINYUSB_RHPORT_HS=y
+
+# Device descriptor (Handy Keyboard)
+CONFIG_TINYUSB_DESC_CUSTOM_VID=0xCAFE
+CONFIG_TINYUSB_DESC_CUSTOM_PID=0x4001
+CONFIG_TINYUSB_DESC_MANUFACTURER_STRING="doublebooking"
+CONFIG_TINYUSB_DESC_PRODUCT_STRING="Handy Keyboard"
+CONFIG_TINYUSB_DESC_SERIAL_STRING="HK20260112"
+CONFIG_TINYUSB_DESC_BCD_DEVICE=0x0100
+
+# =============================================================================
+# 5. Wireless Communication (ESP-Hosted: ESP32-P4 + ESP32-C6)
+# =============================================================================
+
+# ESP-Hosted slave target (C6 for WiFi/BLE)
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+
+# Wi-Fi Remote buffers (for Wake-on-LAN packets)
+CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM=16
+CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM=64
+CONFIG_WIFI_RMT_DYNAMIC_TX_BUFFER_NUM=64
+CONFIG_WIFI_RMT_AMPDU_TX_ENABLED=y
+CONFIG_WIFI_RMT_TX_BA_WIN=32
+CONFIG_WIFI_RMT_AMPDU_RX_ENABLED=y
+CONFIG_WIFI_RMT_RX_BA_WIN=32
+
+# =============================================================================
+# 6. Bluetooth (NimBLE over ESP-Hosted VHCI)
+# =============================================================================
+
+# BT Host on ESP32-P4, BT Controller on ESP32-C6
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_DISABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_TRANSPORT_UART=n
+
+# ESP-Hosted BLE bridge
+CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE=y
+CONFIG_ESP_HOSTED_NIMBLE_HCI_VHCI=y
+
+# NimBLE roles & connections (5 devices support)
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=5
+CONFIG_BT_NIMBLE_MAX_BONDS=5
+
+# NimBLE task configuration
+CONFIG_BT_NIMBLE_PINNED_TO_CORE_0=y
+CONFIG_BT_NIMBLE_PINNED_TO_CORE=0
+CONFIG_BT_NIMBLE_TASK_STACK_SIZE=4096
+
+# Resolve GPIO conflicts (HCI UART not needed for VHCI)
+CONFIG_BT_NIMBLE_HCI_UART_CTS_PIN=-1
+CONFIG_BT_NIMBLE_HCI_UART_RTS_PIN=-1
+
+# NimBLE HID Service (required for BLE HID keyboard)
+CONFIG_BT_NIMBLE_HID_SERVICE=y
+
+# NimBLE logging (WARNING to reduce log noise)
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+
+# =============================================================================
+# 7. Network (LWIP) - for Wake-on-LAN
+# =============================================================================
+
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
+CONFIG_LWIP_TCP_WND_DEFAULT=65534
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+CONFIG_LWIP_TCP_SACK_OUT=y
+
+# =============================================================================
+# 8. Display Hardware (MIPI-DSI 4.3" 480x800)
+# =============================================================================
+
+CONFIG_BSP_LCD_TYPE_480_800=y
+CONFIG_BSP_I2C_NUM=0
+CONFIG_BSP_I2C_CLK_SPEED_HZ=400000
+
+# =============================================================================
+# 9. LVGL Core Configuration
+# =============================================================================
+
+# Color depth: 32bit ARGB8888 (recommended for ESP32-P4 MIPI-DSI)
+CONFIG_LV_COLOR_DEPTH_32=y
+
+# Memory: Use CLIB malloc for PSRAM support
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_MEM_SIZE_KILOBYTES=512
+CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=128
+
+# Logging
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_LEVEL_WARN=y
+CONFIG_LV_LOG_PRINTF=y
+
+# =============================================================================
+# 10. LVGL Performance & PPA (Pixel Processing Accelerator)
+# =============================================================================
+
+# Draw configuration
+CONFIG_LV_DRAW_DMA2D_NUM_DRAW_UNITS=1
+CONFIG_LV_LAYER_MAX_COUNT=8
+
+# PPA: Screen rotation (esp_lvgl_port) - ENABLED
+# Used for landscape/portrait orientation and MJPEG frames
+CONFIG_LVGL_PORT_ENABLE_PPA=y
+
+# PPA: LVGL internal draw operations - DISABLED
+# Known buffer alignment issues on ESP32-P4
+CONFIG_LV_USE_PPA=n
+
+# =============================================================================
+# 11. LVGL Fonts
+# =============================================================================
+
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+
+# =============================================================================
+# 12. LVGL Image Decoders
+# =============================================================================
+
+# Built-in decoders
+CONFIG_LV_USE_GIF=y
+CONFIG_LV_USE_LODEPNG=y
+CONFIG_LV_USE_BMP=y
+CONFIG_LV_USE_TJPGD=y
+
+# External library decoders - DISABLED (not available)
+CONFIG_LV_USE_LIBPNG=n
+CONFIG_LV_USE_LIBJPEG_TURBO=n
+CONFIG_LV_USE_FFMPEG=n
+
+# =============================================================================
+# 13. Filesystem (SD Card)
+# =============================================================================
+
+# LVGL POSIX filesystem (drive letter 'S' = 83 for SD card)
+CONFIG_LV_USE_FS_POSIX=y
+CONFIG_LV_FS_POSIX_LETTER=83
+
+# FAT long filename support (for Japanese filenames)
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+
+# =============================================================================
+# 14. I2C Devices
+# =============================================================================
+
+# I2C configuration (GPIO7=SDA, GPIO8=SCL)
+# Devices: DS3231M RTC (0x68), ES8311 Audio Codec (0x18), GT911 Touch (0x5D)
+CONFIG_I2C_ENABLE_DEBUG_LOG=n

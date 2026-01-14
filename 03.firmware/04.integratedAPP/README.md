@@ -1,7 +1,65 @@
-# Integrated Application - Rust試行の記録
+# Integrated Application
 
 ## 概要
-このディレクトリは、ESP32-P4 ファームウェアを **Rust + ESP-IDF** で実装する試みを行った場所です。
+ESP32-P4ベースのHandy Keyboard統合ファームウェアです。
+
+**現在の実装**: **C/C++ + ESP-IDF v5.5.2**
+**過去の試行**: Rust + ESP-IDF（2026年1月時点で互換性問題により中止）
+
+---
+
+## ⚠️ 重要：ビルド環境
+
+### 必須：ESP-IDF v5.5.2を使用
+
+```bash
+# ❌ 間違い（v6.1が起動する）
+. $HOME/esp/esp-idf/export.sh
+
+# ✅ 正しい（v5.5.2を明示的に指定）
+. $HOME/esp/esp-idf-v5.5.2/export.sh
+```
+
+**理由**:
+- プロジェクトはESP-IDF v5.5.2向けに設定（`dependencies.lock`）
+- v6.1では異なるツールチェーン（esp-15.2.0）が使用され、互換性なし
+- v5.5.2では esp-14.2.0 ツールチェーンが必要
+
+### チップリビジョン設定
+
+実機がESP32-P4 revision v1.0の場合、`sdkconfig.defaults`に以下が設定されています：
+
+```ini
+CONFIG_ESP32P4_REV_MIN_100=y
+CONFIG_ESP32P4_REV_MIN_FULL=100
+CONFIG_ESP32P4_REV_MAX_FULL=199
+```
+
+---
+
+## ビルド手順
+
+```bash
+# 1. ESP-IDF v5.5.2環境をソース
+. $HOME/esp/esp-idf-v5.5.2/export.sh
+
+# 2. プロジェクトディレクトリへ移動
+cd 03.firmware/04.integratedAPP
+
+# 3. ビルド
+idf.py build
+
+# 4. フラッシュ & モニター
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+**初回ビルド時**: `dependencies.lock`に従ってManaged Componentsが自動ダウンロードされます。
+
+---
+
+## Rust試行の記録（参考）
+
+このディレクトリは元々、ESP32-P4 ファームウェアを **Rust + ESP-IDF** で実装する試みを行った場所です。
 
 **結論**: 2026年1月時点では、ESP32-P4 + Rust + ESP-IDF v5.5.2 の組み合わせは困難であり、**C/C++ + ESP-IDF での開発に戻す**ことを決定しました。
 
