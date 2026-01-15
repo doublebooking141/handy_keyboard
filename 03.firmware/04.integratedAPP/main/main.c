@@ -197,14 +197,13 @@ void app_main(void)
     ESP_LOGI(TAG, "Initialization complete");
     ESP_LOGI(TAG, "Free heap: %lu bytes", esp_get_free_heap_size());
 
+    // Disable all logging after initialization to prevent USB Serial/JTAG blocking
+    // when no monitor is connected (this affects BLE task scheduling)
+    ESP_LOGI(TAG, "Disabling runtime logs for standalone operation");
+    esp_log_level_set("*", ESP_LOG_NONE);
+
     // Main loop - LVGL timer handling is done by esp_lvgl_port
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
-        // Heartbeat log (reduced frequency to avoid log spam)
-        static int heartbeat_count = 0;
-        if (++heartbeat_count >= 10) {
-            ESP_LOGI(TAG, "Heartbeat - Free heap: %lu bytes", esp_get_free_heap_size());
-            heartbeat_count = 0;
-        }
     }
 }

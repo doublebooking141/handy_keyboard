@@ -210,6 +210,8 @@ static const uint8_t hid_report_descriptor[] = {
 
 static bool g_initialized = false;
 static bool g_connected = false;
+static bool g_keyboard_subscribed = false;  // Track notification subscription
+static bool g_consumer_subscribed = false;
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static SemaphoreHandle_t g_send_mutex = NULL;
 static uint8_t g_own_addr_type;
@@ -551,36 +553,74 @@ static int start_advertising(void)
 
 static int ble_hid_gap_event(struct ble_gap_event *event, void *arg)
 {
+    struct ble_gap_conn_desc desc;
+    int rc;
+
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
+        ESP_LOGI(TAG, "Connected: status=%d", event->connect.status);
         if (event->connect.status == 0) {
-            ESP_LOGI(TAG, "Connected, handle=%d", event->connect.conn_handle);
             g_conn_handle = event->connect.conn_handle;
             g_connected = true;
+            g_keyboard_subscribed = false;
+            g_consumer_subscribed = false;
+
+            // Initiate security
+            rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
+            if (rc == 0 && !desc.sec_state.encrypted) {
+                ble_gap_security_initiate(event->connect.conn_handle);
+            }
         } else {
-            ESP_LOGW(TAG, "Connection failed: %d", event->connect.status);
             start_advertising();
         }
         break;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGI(TAG, "Disconnected, reason=%d", event->disconnect.reason);
+        ESP_LOGI(TAG, "Disconnected");
         g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         g_connected = false;
+        g_keyboard_subscribed = false;
+        g_consumer_subscribed = false;
         start_advertising();
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        ESP_LOGD(TAG, "Advertising complete");
-        start_advertising();
+        if (!g_connected) {
+            start_advertising();
+        }
         break;
 
     case BLE_GAP_EVENT_ENC_CHANGE:
-        ESP_LOGI(TAG, "Encryption changed: %d", event->enc_change.status);
+        // Encryption status changed - no action needed
+        break;
+
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        // Track notification subscription
+        if (event->subscribe.attr_handle == g_keyboard_handle) {
+            g_keyboard_subscribed = event->subscribe.cur_notify;
+        } else if (event->subscribe.attr_handle == g_consumer_handle) {
+            g_consumer_subscribed = event->subscribe.cur_notify;
+        }
+        break;
+
+    case BLE_GAP_EVENT_NOTIFY_TX:
+        // Notification sent - no action needed
+        break;
+
+    case BLE_GAP_EVENT_MTU:
+        // MTU updated - no action needed
         break;
 
     case BLE_GAP_EVENT_REPEAT_PAIRING:
+        rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
+        if (rc == 0) {
+            ble_store_util_delete_peer(&desc.peer_id_addr);
+        }
         return BLE_GAP_REPEAT_PAIRING_RETRY;
+
+    case BLE_GAP_EVENT_PASSKEY_ACTION:
+        // Just Works - no action needed
+        break;
 
     default:
         break;
@@ -791,7 +831,7 @@ esp_err_t ble_hid_stop_advertising(void)
 
 esp_err_t ble_hid_send_keyboard(uint8_t modifiers, const uint8_t *keys, size_t key_count)
 {
-    if (!g_connected || g_keyboard_handle == 0) {
+    if (!g_initialized || !g_connected || g_keyboard_handle == 0) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -812,12 +852,7 @@ esp_err_t ble_hid_send_keyboard(uint8_t modifiers, const uint8_t *keys, size_t k
     }
 
     int rc = ble_gatts_notify_custom(g_conn_handle, g_keyboard_handle, om);
-    if (rc != 0) {
-        ESP_LOGE(TAG, "Notify keyboard failed: %d", rc);
-        return ESP_FAIL;
-    }
-
-    return ESP_OK;
+    return (rc == 0) ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t ble_hid_send_key(uint8_t modifiers, uint8_t keycode)
