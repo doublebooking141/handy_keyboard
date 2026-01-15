@@ -1,0 +1,17 @@
+## IDF Component Manager Manifest File
+## Handy Keyboard Firmware - Managed Components
+
+dependencies:
+  # USB HID support
+  espressif/esp_tinyusb: "^1.4.0"
+
+  # WiFi/BLE support (ESP32-C6 via ESP-Hosted)
+  espressif/esp_wifi_remote: "*"
+  espressif/esp_hosted: "*"
+
+  # Board Support Package (includes LVGL, Display, Touch, Audio)
+  bsp_jc4880p443c:
+    path: ../../common_components/bsp_jc4880p443c
+
+  # LED strip support (for RGB LEDs if used) - DISABLED until needed
+  # espressif/led_strip: "^2.5.0"
