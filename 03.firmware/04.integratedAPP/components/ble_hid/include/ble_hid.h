@@ -102,6 +102,28 @@ esp_err_t ble_hid_send_string(const char *str);
  */
 esp_err_t ble_hid_send_consumer(uint16_t usage);
 
+// ============================================================================
+// Mouse Constants and API
+// ============================================================================
+
+/** @brief Mouse button definitions */
+#define MOUSE_BTN_LEFT          0x01
+#define MOUSE_BTN_RIGHT         0x02
+#define MOUSE_BTN_MIDDLE        0x04
+
+/**
+ * @brief Send mouse report
+ *
+ * @param buttons Button state (MOUSE_BTN_LEFT, MOUSE_BTN_RIGHT, MOUSE_BTN_MIDDLE)
+ * @param dx X movement (-127 to 127, positive = right)
+ * @param dy Y movement (-127 to 127, positive = down)
+ * @param wheel Vertical scroll (-127 to 127, positive = up)
+ * @param h_wheel Horizontal scroll (-127 to 127, positive = right)
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_send_mouse(uint8_t buttons, int8_t dx, int8_t dy,
+                              int8_t wheel, int8_t h_wheel);
+
 /**
  * @brief Get current BLE HID state
  *
