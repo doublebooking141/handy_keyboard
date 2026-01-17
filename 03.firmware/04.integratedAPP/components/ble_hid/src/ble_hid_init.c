@@ -212,9 +212,11 @@ static bool g_initialized = false;
 static bool g_connected = false;
 static bool g_keyboard_subscribed = false;  // Track notification subscription
 static bool g_consumer_subscribed = false;
+static bool g_auto_reconnect = true;         // Auto-reconnect on disconnect
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static SemaphoreHandle_t g_send_mutex = NULL;
 static uint8_t g_own_addr_type;
+static ble_hid_event_cb_t g_event_callback = NULL;
 
 // GATT characteristic handles
 static uint16_t g_keyboard_handle = 0;
@@ -505,6 +507,11 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
 
 static int start_advertising(void)
 {
+    // Don't restart if already advertising
+    if (ble_gap_adv_active()) {
+        return 0;
+    }
+
     struct ble_gap_adv_params adv_params;
     struct ble_hs_adv_fields fields;
     int rc;
@@ -558,41 +565,66 @@ static int ble_hid_gap_event(struct ble_gap_event *event, void *arg)
 
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
-        ESP_LOGI(TAG, "GAP CONNECT event: status=%d", event->connect.status);
+        ESP_LOGI(TAG, "GAP CONNECT event: status=%d, handle=%d",
+                 event->connect.status, event->connect.conn_handle);
+
+        // Check if connection handle is valid (even if status != 0)
+        rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
+
         if (event->connect.status == 0) {
+            // Normal successful connection
             g_conn_handle = event->connect.conn_handle;
             g_connected = true;
             g_keyboard_subscribed = false;
             g_consumer_subscribed = false;
 
-            rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
             if (rc == 0) {
                 ESP_LOGI(TAG, "Connected! handle=%" PRIu16 " peer=%02X:%02X:%02X:%02X:%02X:%02X",
                          g_conn_handle,
                          desc.peer_id_addr.val[5], desc.peer_id_addr.val[4],
                          desc.peer_id_addr.val[3], desc.peer_id_addr.val[2],
                          desc.peer_id_addr.val[1], desc.peer_id_addr.val[0]);
+            }
 
-                // Initiate security after connection
-                if (!desc.sec_state.encrypted) {
-                    ESP_LOGI(TAG, "Initiating security...");
-                    ble_gap_security_initiate(event->connect.conn_handle);
-                }
+            // Notify callback
+            if (g_event_callback) {
+                g_event_callback(BLE_HID_STATE_CONNECTED);
             }
         } else {
-            // Decode common HCI status codes
-            const char *err_str = "unknown";
-            switch (event->connect.status) {
-                case 0x06: err_str = "Pin/Key Missing"; break;
-                case 0x13: err_str = "Remote User Terminated"; break;
-                case 0x16: err_str = "Local Host Terminated"; break;
-                case 0x1A: err_str = "Unsupported Remote Feature"; break;
-                case 0x22: err_str = "Instant Passed"; break;
-                case 0x28: err_str = "Pairing Not Supported"; break;
+            // ESP-Hosted quirk: may report non-zero status even when connection is valid
+            // Check if connection handle is actually valid and accept it anyway
+            if (rc == 0) {
+                ESP_LOGW(TAG, "Connection status=%d but handle %d is valid, accepting connection (ESP-Hosted quirk)",
+                         event->connect.status, event->connect.conn_handle);
+                g_conn_handle = event->connect.conn_handle;
+                g_connected = true;
+                g_keyboard_subscribed = false;
+                g_consumer_subscribed = false;
+
+                ESP_LOGI(TAG, "Connected (quirk)! peer=%02X:%02X:%02X:%02X:%02X:%02X",
+                         desc.peer_id_addr.val[5], desc.peer_id_addr.val[4],
+                         desc.peer_id_addr.val[3], desc.peer_id_addr.val[2],
+                         desc.peer_id_addr.val[1], desc.peer_id_addr.val[0]);
+
+                // Notify callback
+                if (g_event_callback) {
+                    g_event_callback(BLE_HID_STATE_CONNECTED);
+                }
+            } else {
+                // Decode common HCI status codes
+                const char *err_str = "unknown";
+                switch (event->connect.status) {
+                    case 0x06: err_str = "Pin/Key Missing"; break;
+                    case 0x13: err_str = "Remote User Terminated"; break;
+                    case 0x16: err_str = "Local Host Terminated"; break;
+                    case 0x1A: err_str = "Unsupported Remote Feature"; break;
+                    case 0x22: err_str = "Instant Passed"; break;
+                    case 0x28: err_str = "Pairing Not Supported"; break;
+                }
+                ESP_LOGW(TAG, "Connection failed: status=%d (0x%02X: %s)",
+                         event->connect.status, event->connect.status, err_str);
+                start_advertising();
             }
-            ESP_LOGW(TAG, "Connection failed: status=%d (0x%02X: %s)",
-                     event->connect.status, event->connect.status, err_str);
-            start_advertising();
         }
         break;
 
@@ -602,7 +634,16 @@ static int ble_hid_gap_event(struct ble_gap_event *event, void *arg)
         g_connected = false;
         g_keyboard_subscribed = false;
         g_consumer_subscribed = false;
-        start_advertising();
+
+        // Notify callback
+        if (g_event_callback) {
+            g_event_callback(BLE_HID_STATE_DISCONNECTED);
+        }
+
+        // Auto-reconnect: restart advertising
+        if (g_auto_reconnect) {
+            start_advertising();
+        }
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -612,7 +653,16 @@ static int ble_hid_gap_event(struct ble_gap_event *event, void *arg)
         break;
 
     case BLE_GAP_EVENT_ENC_CHANGE:
-        // Encryption status changed - no action needed
+        ESP_LOGI(TAG, "Encryption change: status=%d, conn_handle=%d",
+                 event->enc_change.status, event->enc_change.conn_handle);
+        // Encryption enabled means bonding completed (for Just Works pairing)
+        if (event->enc_change.status == 0) {
+            ESP_LOGI(TAG, "Bonding completed (encryption enabled)");
+            // Notify UI to refresh bonded device list
+            if (g_event_callback) {
+                g_event_callback(BLE_HID_STATE_CONNECTED);
+            }
+        }
         break;
 
     case BLE_GAP_EVENT_SUBSCRIBE:
@@ -679,7 +729,19 @@ static void ble_hid_on_sync(void)
     ESP_LOGI(TAG, "BLE Address: %02X:%02X:%02X:%02X:%02X:%02X",
              addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]);
 
-    start_advertising();
+    // Check if there are bonded devices
+    ble_addr_t peer_addrs[CONFIG_BT_NIMBLE_MAX_BONDS];
+    int num_peers = 0;
+    rc = ble_store_util_bonded_peers(peer_addrs, &num_peers, CONFIG_BT_NIMBLE_MAX_BONDS);
+
+    if (rc == 0 && num_peers > 0) {
+        // Have bonded devices - start advertising for reconnection
+        ESP_LOGI(TAG, "Found %d bonded device(s), starting advertising", num_peers);
+        start_advertising();
+    } else {
+        // No bonded devices - wait for user to initiate from Settings
+        ESP_LOGI(TAG, "No bonded devices, waiting for pairing from Settings");
+    }
 }
 
 static void ble_hid_host_task(void *param)
@@ -752,14 +814,13 @@ esp_err_t ble_hid_init(void)
     ble_hs_cfg.reset_cb = ble_hid_on_reset;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
-    // Security: No I/O, bonding enabled, legacy pairing only
-    // Note: Disabled SC (Secure Connections) due to status=26 errors with ESP-Hosted
-    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
-    ble_hs_cfg.sm_bonding = 1;
-    ble_hs_cfg.sm_mitm = 0;
-    ble_hs_cfg.sm_sc = 0;  // Disable Secure Connections for ESP-Hosted compatibility
-    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
-    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
+    // Security: Match keyboard_2025 (Secure Connections enabled)
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;  // No I/O capability (Just Works)
+    ble_hs_cfg.sm_bonding = 1;                    // Enable bonding
+    ble_hs_cfg.sm_mitm = 0;                       // No MITM protection (Just Works)
+    ble_hs_cfg.sm_sc = 1;                         // Enable Secure Connections
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
     // Step 5: Initialize GAP and GATT
     ble_svc_gap_init();
@@ -821,7 +882,8 @@ ble_hid_state_t ble_hid_get_state(void)
 {
     if (!g_initialized) return BLE_HID_STATE_IDLE;
     if (g_connected) return BLE_HID_STATE_CONNECTED;
-    return BLE_HID_STATE_ADVERTISING;
+    if (ble_gap_adv_active()) return BLE_HID_STATE_ADVERTISING;
+    return BLE_HID_STATE_DISCONNECTED;
 }
 
 bool ble_hid_is_connected(void)
@@ -831,8 +893,8 @@ bool ble_hid_is_connected(void)
 
 void ble_hid_register_event_callback(ble_hid_event_cb_t cb)
 {
-    // Not implemented in simplified version
-    (void)cb;
+    g_event_callback = cb;
+    ESP_LOGI(TAG, "Event callback registered: %p", (void*)cb);
 }
 
 esp_err_t ble_hid_start_advertising(void)
@@ -964,4 +1026,148 @@ esp_err_t ble_hid_send_consumer(uint16_t usage)
     }
 
     return ESP_OK;
+}
+
+// ============================================================================
+// Bond Management APIs
+// ============================================================================
+
+int ble_hid_get_bonded_count(void)
+{
+    if (!g_initialized) {
+        return 0;  // Not initialized yet
+    }
+
+    ble_addr_t peer_id_addrs[CONFIG_BT_NIMBLE_MAX_BONDS];
+    int num_peers = 0;
+
+    int rc = ble_store_util_bonded_peers(peer_id_addrs, &num_peers, CONFIG_BT_NIMBLE_MAX_BONDS);
+    if (rc == 0) {
+        return num_peers;
+    }
+    return 0;
+}
+
+int ble_hid_get_bonded_devices(uint8_t addrs[][6], int max_count)
+{
+    if (!g_initialized || max_count <= 0) {
+        return 0;
+    }
+
+    ble_addr_t peer_id_addrs[CONFIG_BT_NIMBLE_MAX_BONDS];
+    int num_peers = 0;
+
+    int rc = ble_store_util_bonded_peers(peer_id_addrs, &num_peers, CONFIG_BT_NIMBLE_MAX_BONDS);
+    if (rc != 0) {
+        return 0;
+    }
+
+    int count = (num_peers < max_count) ? num_peers : max_count;
+    for (int i = 0; i < count; i++) {
+        memcpy(addrs[i], peer_id_addrs[i].val, 6);
+    }
+
+    return count;
+}
+
+esp_err_t ble_hid_delete_bond(const uint8_t *addr)
+{
+    if (!g_initialized || !addr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // If connected, check if we're deleting the connected device's bond
+    if (g_connected && g_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        struct ble_gap_conn_desc desc;
+        int rc = ble_gap_conn_find(g_conn_handle, &desc);
+        if (rc == 0) {
+            // Compare addresses (NimBLE stores in little-endian)
+            if (memcmp(desc.peer_id_addr.val, addr, 6) == 0) {
+                ESP_LOGI(TAG, "Disconnecting before deleting bond...");
+                ble_gap_terminate(g_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+                // Wait a bit for disconnect to complete
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+        }
+    }
+
+    // Build ble_addr_t from raw address
+    ble_addr_t peer_addr;
+    peer_addr.type = BLE_ADDR_PUBLIC;  // Assume public address
+    memcpy(peer_addr.val, addr, 6);
+
+    int rc = ble_store_util_delete_peer(&peer_addr);
+    if (rc != 0) {
+        // Try with random address type
+        peer_addr.type = BLE_ADDR_RANDOM;
+        rc = ble_store_util_delete_peer(&peer_addr);
+    }
+
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Failed to delete bond: %d", rc);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Bond deleted: %02X:%02X:%02X:%02X:%02X:%02X",
+             addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]);
+    return ESP_OK;
+}
+
+esp_err_t ble_hid_delete_all_bonds(void)
+{
+    if (!g_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Check if there are any bonds to clear
+    int count = ble_hid_get_bonded_count();
+    if (count == 0) {
+        ESP_LOGI(TAG, "No bonds to clear");
+        return ESP_OK;
+    }
+
+    // First disconnect if connected
+    if (g_connected) {
+        ble_hid_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    int rc = ble_store_clear();
+    if (rc != 0 && rc != 8) {  // 8 = BLE_HS_EREJECT (may occur if already empty)
+        ESP_LOGE(TAG, "Failed to clear bonds: %d", rc);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "All bonds deleted (count was %d)", count);
+    return ESP_OK;
+}
+
+esp_err_t ble_hid_disconnect(void)
+{
+    if (!g_connected) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int rc = ble_gap_terminate(g_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Disconnect failed: %d", rc);
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+void ble_hid_set_auto_reconnect(bool enable)
+{
+    g_auto_reconnect = enable;
+}
+
+bool ble_hid_get_auto_reconnect(void)
+{
+    return g_auto_reconnect;
+}
+
+void ble_hid_register_callback(ble_hid_event_cb_t cb)
+{
+    g_event_callback = cb;
 }
