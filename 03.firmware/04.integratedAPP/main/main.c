@@ -61,6 +61,7 @@ static void nvs_init(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
     ESP_LOGI(TAG, "NVS initialized");
 }
 
@@ -197,10 +198,11 @@ void app_main(void)
     ESP_LOGI(TAG, "Initialization complete");
     ESP_LOGI(TAG, "Free heap: %lu bytes", esp_get_free_heap_size());
 
-    // Disable all logging after initialization to prevent USB Serial/JTAG blocking
-    // when no monitor is connected (this affects BLE task scheduling)
-    ESP_LOGI(TAG, "Disabling runtime logs for standalone operation");
-    esp_log_level_set("*", ESP_LOG_NONE);
+    // Disable most logging but keep BLE_HID for debugging
+    // This prevents USB Serial/JTAG blocking while allowing BLE debugging
+    ESP_LOGI(TAG, "Reducing runtime logs for standalone operation");
+    esp_log_level_set("*", ESP_LOG_WARN);
+    esp_log_level_set("BLE_HID", ESP_LOG_INFO);
 
     // Main loop - LVGL timer handling is done by esp_lvgl_port
     while (1) {

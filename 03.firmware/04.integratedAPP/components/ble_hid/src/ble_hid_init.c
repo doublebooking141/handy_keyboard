@@ -558,19 +558,40 @@ static int ble_hid_gap_event(struct ble_gap_event *event, void *arg)
 
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
-        ESP_LOGI(TAG, "Connected: status=%d", event->connect.status);
+        ESP_LOGI(TAG, "GAP CONNECT event: status=%d", event->connect.status);
         if (event->connect.status == 0) {
             g_conn_handle = event->connect.conn_handle;
             g_connected = true;
             g_keyboard_subscribed = false;
             g_consumer_subscribed = false;
 
-            // Initiate security
             rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
-            if (rc == 0 && !desc.sec_state.encrypted) {
-                ble_gap_security_initiate(event->connect.conn_handle);
+            if (rc == 0) {
+                ESP_LOGI(TAG, "Connected! handle=%" PRIu16 " peer=%02X:%02X:%02X:%02X:%02X:%02X",
+                         g_conn_handle,
+                         desc.peer_id_addr.val[5], desc.peer_id_addr.val[4],
+                         desc.peer_id_addr.val[3], desc.peer_id_addr.val[2],
+                         desc.peer_id_addr.val[1], desc.peer_id_addr.val[0]);
+
+                // Initiate security after connection
+                if (!desc.sec_state.encrypted) {
+                    ESP_LOGI(TAG, "Initiating security...");
+                    ble_gap_security_initiate(event->connect.conn_handle);
+                }
             }
         } else {
+            // Decode common HCI status codes
+            const char *err_str = "unknown";
+            switch (event->connect.status) {
+                case 0x06: err_str = "Pin/Key Missing"; break;
+                case 0x13: err_str = "Remote User Terminated"; break;
+                case 0x16: err_str = "Local Host Terminated"; break;
+                case 0x1A: err_str = "Unsupported Remote Feature"; break;
+                case 0x22: err_str = "Instant Passed"; break;
+                case 0x28: err_str = "Pairing Not Supported"; break;
+            }
+            ESP_LOGW(TAG, "Connection failed: status=%d (0x%02X: %s)",
+                     event->connect.status, event->connect.status, err_str);
             start_advertising();
         }
         break;
@@ -691,11 +712,13 @@ esp_err_t ble_hid_init(void)
     }
 
     // Step 1: Connect to ESP-Hosted coprocessor
+    ESP_LOGI(TAG, "Connecting to ESP-Hosted coprocessor...");
     ret = esp_hosted_connect_to_slave();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "ESP-Hosted connect failed: %s", esp_err_to_name(ret));
         goto cleanup;
     }
+    ESP_LOGI(TAG, "ESP-Hosted connected!");
 
     // Get coprocessor FW version
     esp_hosted_coprocessor_fwver_t fwver;
@@ -729,13 +752,14 @@ esp_err_t ble_hid_init(void)
     ble_hs_cfg.reset_cb = ble_hid_on_reset;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
-    // Security: No I/O, bonding enabled
+    // Security: No I/O, bonding enabled, legacy pairing only
+    // Note: Disabled SC (Secure Connections) due to status=26 errors with ESP-Hosted
     ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
     ble_hs_cfg.sm_bonding = 1;
     ble_hs_cfg.sm_mitm = 0;
-    ble_hs_cfg.sm_sc = 1;
-    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
-    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_sc = 0;  // Disable Secure Connections for ESP-Hosted compatibility
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
 
     // Step 5: Initialize GAP and GATT
     ble_svc_gap_init();
@@ -831,7 +855,16 @@ esp_err_t ble_hid_stop_advertising(void)
 
 esp_err_t ble_hid_send_keyboard(uint8_t modifiers, const uint8_t *keys, size_t key_count)
 {
-    if (!g_initialized || !g_connected || g_keyboard_handle == 0) {
+    if (!g_initialized) {
+        ESP_LOGW(TAG, "Send failed: not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!g_connected) {
+        ESP_LOGW(TAG, "Send failed: not connected");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (g_keyboard_handle == 0) {
+        ESP_LOGW(TAG, "Send failed: keyboard handle is 0");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -848,11 +881,19 @@ esp_err_t ble_hid_send_keyboard(uint8_t modifiers, const uint8_t *keys, size_t k
 
     struct os_mbuf *om = ble_hs_mbuf_from_flat(report, sizeof(report));
     if (!om) {
+        ESP_LOGE(TAG, "Send failed: no memory for mbuf");
         return ESP_ERR_NO_MEM;
     }
 
     int rc = ble_gatts_notify_custom(g_conn_handle, g_keyboard_handle, om);
-    return (rc == 0) ? ESP_OK : ESP_FAIL;
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Notify failed: rc=%d, conn=%" PRIu16 ", handle=%" PRIu16,
+                 rc, g_conn_handle, g_keyboard_handle);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Sent key: mod=0x%02X key=0x%02X", modifiers, keys ? keys[0] : 0);
+    return ESP_OK;
 }
 
 esp_err_t ble_hid_send_key(uint8_t modifiers, uint8_t keycode)
@@ -873,6 +914,7 @@ esp_err_t ble_hid_send_string(const char *str)
 {
     if (!str) return ESP_ERR_INVALID_ARG;
 
+    ESP_LOGI(TAG, "Sending string: %s", str);
     esp_err_t ret = ESP_OK;
 
     for (const char *p = str; *p && ret == ESP_OK; p++) {

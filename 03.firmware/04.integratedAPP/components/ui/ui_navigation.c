@@ -92,24 +92,26 @@ extern lv_obj_t *ui_Image5;         // Enter image (inside Panel21)
 // AtoZKeyboardScreen
 extern lv_obj_t *ui_OtherKeyboard;  // lv_keyboard widget
 
-// CursorScreen buttons
+// CursorScreen buttons (panels and their clickable children)
 extern lv_obj_t *ui_Panel1;         // Container for Image6
 extern lv_obj_t *ui_Image6;         // Top-left (絵) -> Menu (actual clickable image)
-extern lv_obj_t *ui_Panel31;        // [a] -> AtoZ
-extern lv_obj_t *ui_Panel36;        // あ -> JP Keyboard
+extern lv_obj_t *ui_Panel31;        // [a] -> AtoZ (container)
+extern lv_obj_t *ui_Label22;        // ?123 label (inside Panel31, for AtoZ nav)
+extern lv_obj_t *ui_Panel36;        // あ -> JP Keyboard (container)
+extern lv_obj_t *ui_Label27;        // あ/a label (inside Panel36, for JP nav)
 
-// CursorScreen key panels
-extern lv_obj_t *ui_Panel22;        // ESC
-extern lv_obj_t *ui_Panel24;        // Enter
-extern lv_obj_t *ui_Panel37;        // Up arrow
-extern lv_obj_t *ui_Panel38;        // Left arrow
-extern lv_obj_t *ui_Panel39;        // Down arrow
-extern lv_obj_t *ui_Panel33;        // Right arrow
-extern lv_obj_t *ui_Panel23;        // Paste (Ctrl+V)
-extern lv_obj_t *ui_Panel28;        // Copy (Ctrl+C)
-extern lv_obj_t *ui_Panel34;        // Undo (Ctrl+Z)
-extern lv_obj_t *ui_Panel29;        // Redo (Ctrl+Y)
-extern lv_obj_t *ui_Panel35;        // Backspace
+// CursorScreen key elements (images/labels inside panels)
+extern lv_obj_t *ui_Label16;        // ESC label (inside Panel22)
+extern lv_obj_t *ui_Label18;        // Enter label (inside Panel24)
+extern lv_obj_t *ui_Image14;        // Up arrow image (inside Panel37)
+extern lv_obj_t *ui_Image13;        // Left arrow image (inside Panel38)
+extern lv_obj_t *ui_Image15;        // Down arrow image (inside Panel39)
+extern lv_obj_t *ui_Image12;        // Right arrow image (inside Panel33)
+extern lv_obj_t *ui_Label17;        // Paste label (inside Panel23)
+extern lv_obj_t *ui_Label20;        // Copy label (inside Panel28)
+extern lv_obj_t *ui_Label25;        // Undo label (inside Panel34)
+extern lv_obj_t *ui_Label21;        // Redo label (inside Panel29)
+extern lv_obj_t *ui_Label26;        // Backspace label (inside Panel35)
 
 // AnalogClockWithBackgroud back button
 extern lv_obj_t *ui_Image11;
@@ -124,12 +126,13 @@ extern lv_obj_t *ui_Panel43;
 LV_IMG_DECLARE(ui_img_2026807732);  // Uターン矢印 2.png
 
 // Track which screens have been initialized with navigation
-static bool nav_initialized_jp = false;
-static bool nav_initialized_atoz = false;
-static bool nav_initialized_cursor = false;
-static bool nav_initialized_clock = false;
-static bool nav_initialized_datetime = false;
-static bool nav_initialized_settings = false;
+// Also track the screen object to detect re-creation
+static lv_obj_t *last_jp_screen = NULL;
+static lv_obj_t *last_atoz_screen = NULL;
+static lv_obj_t *last_cursor_screen = NULL;
+static lv_obj_t *last_clock_screen = NULL;
+static lv_obj_t *last_datetime_screen = NULL;
+static lv_obj_t *last_settings_screen = NULL;
 
 // Dynamic elements
 static lv_obj_t *setting_back_btn = NULL;
@@ -140,63 +143,57 @@ static lv_obj_t *setting_back_btn = NULL;
 
 static void nav_to_menu(lv_event_t *e)
 {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Navigating to Menu");
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
         _ui_screen_change(&ui_MenuScreen, LV_SCR_LOAD_ANIM_FADE_IN, 300, 0, ui_MenuScreen_screen_init);
     }
 }
 
 static void nav_to_jp_keyboard(lv_event_t *e)
 {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Navigating to JP Keyboard");
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
         _ui_screen_change(&ui_JPKeyboardScreen, LV_SCR_LOAD_ANIM_FADE_IN, 300, 0, ui_JPKeyboardScreen_screen_init);
     }
 }
 
 static void nav_to_atoz_keyboard(lv_event_t *e)
 {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Navigating to AtoZ Keyboard");
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
         _ui_screen_change(&ui_AtoZKeyboardScreen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 200, 0, ui_AtoZKeyboardScreen_screen_init);
     }
 }
 
 static void nav_to_cursor(lv_event_t *e)
 {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Navigating to Cursor Screen");
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
         _ui_screen_change(&ui_CursorScreen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 200, 0, ui_CursorScreen_screen_init);
     }
 }
 
 static void nav_to_clock(lv_event_t *e)
 {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Navigating to Analog Clock");
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
         _ui_screen_change(&ui_AnalogClockWithBackgroud, LV_SCR_LOAD_ANIM_FADE_IN, 300, 0, ui_AnalogClockWithBackgroud_screen_init);
     }
 }
 
 static void nav_to_settings(lv_event_t *e)
 {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Navigating to Settings");
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
         _ui_screen_change(&ui_SettingScreen, LV_SCR_LOAD_ANIM_FADE_IN, 300, 0, ui_SettingScreen_screen_init);
     }
 }
 
 static void nav_power_on_pc(lv_event_t *e)
 {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Power On PC clicked (WoL - not implemented yet)");
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+        // WoL - not implemented yet
     }
 }
 
 static void nav_light_on(lv_event_t *e)
 {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Light On clicked (not implemented yet)");
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+        // Light On - not implemented yet
     }
 }
 
@@ -528,52 +525,42 @@ static void modifier_panel_input_cb(lv_event_t *e)
 
 /**
  * @brief Handle cursor key press
+ * Events are attached to images/labels inside panels for reliable touch detection
  */
 static void cursor_key_cb(lv_event_t *e)
 {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED) return;
 
-    lv_obj_t *panel = lv_event_get_target(e);
+    lv_obj_t *obj = lv_event_get_current_target(e);
     uint8_t keycode = 0;
     uint8_t modifiers = 0;
 
-    if (panel == ui_Panel22) {
+    if (obj == ui_Label16) {
         keycode = HID_KEY_ESC;
-        ESP_LOGI(TAG, "Cursor: ESC");
-    } else if (panel == ui_Panel24) {
+    } else if (obj == ui_Label18) {
         keycode = HID_KEY_ENTER;
-        ESP_LOGI(TAG, "Cursor: Enter");
-    } else if (panel == ui_Panel37) {
+    } else if (obj == ui_Image14) {
         keycode = HID_KEY_UP;
-        ESP_LOGI(TAG, "Cursor: Up");
-    } else if (panel == ui_Panel38) {
+    } else if (obj == ui_Image13) {
         keycode = HID_KEY_LEFT;
-        ESP_LOGI(TAG, "Cursor: Left");
-    } else if (panel == ui_Panel39) {
+    } else if (obj == ui_Image15) {
         keycode = HID_KEY_DOWN;
-        ESP_LOGI(TAG, "Cursor: Down");
-    } else if (panel == ui_Panel33) {
+    } else if (obj == ui_Image12) {
         keycode = HID_KEY_RIGHT;
-        ESP_LOGI(TAG, "Cursor: Right");
-    } else if (panel == ui_Panel23) {
+    } else if (obj == ui_Label17) {
         keycode = HID_KEY_V;
         modifiers = HID_MOD_LCTRL;
-        ESP_LOGI(TAG, "Cursor: Paste");
-    } else if (panel == ui_Panel28) {
+    } else if (obj == ui_Label20) {
         keycode = HID_KEY_C;
         modifiers = HID_MOD_LCTRL;
-        ESP_LOGI(TAG, "Cursor: Copy");
-    } else if (panel == ui_Panel34) {
+    } else if (obj == ui_Label25) {
         keycode = HID_KEY_Z;
         modifiers = HID_MOD_LCTRL;
-        ESP_LOGI(TAG, "Cursor: Undo");
-    } else if (panel == ui_Panel29) {
+    } else if (obj == ui_Label21) {
         keycode = HID_KEY_Y;
         modifiers = HID_MOD_LCTRL;
-        ESP_LOGI(TAG, "Cursor: Redo");
-    } else if (panel == ui_Panel35) {
+    } else if (obj == ui_Label26) {
         keycode = HID_KEY_BACKSPACE;
-        ESP_LOGI(TAG, "Cursor: Backspace");
     }
 
     if (keycode != 0) {
@@ -638,7 +625,7 @@ static void setup_panel_nav(lv_obj_t *panel, lv_event_cb_t cb, const char *name)
 {
     if (panel) {
         lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(panel, cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(panel, cb, LV_EVENT_RELEASED, NULL);
         ESP_LOGD(TAG, "Nav: %s", name);
     }
 }
@@ -659,7 +646,6 @@ static void setup_kana_panel_input(lv_obj_t *panel, const char *name)
 
 static void setup_jp_keyboard_nav(void)
 {
-    if (nav_initialized_jp) return;
 
     // Navigation buttons
     setup_panel_nav(ui_Image2, nav_to_menu, "JP:Image2->Menu");
@@ -716,14 +702,12 @@ static void setup_jp_keyboard_nav(void)
         ESP_LOGD(TAG, "JP: Symbol panel");
     }
 
-    nav_initialized_jp = true;
+    last_jp_screen = ui_JPKeyboardScreen;
     ESP_LOGD(TAG, "JPKeyboard nav ready");
 }
 
 static void setup_atoz_keyboard_nav(void)
 {
-    if (nav_initialized_atoz) return;
-
     setup_panel_nav(ui_HeaderPanel1, nav_to_jp_keyboard, "AtoZ:Header->JP");
     if (ui_OtherKeyboard) {
         // Mode switch (button 35)
@@ -732,71 +716,68 @@ static void setup_atoz_keyboard_nav(void)
         lv_obj_add_event_cb(ui_OtherKeyboard, atoz_keyboard_char_cb, LV_EVENT_VALUE_CHANGED, NULL);
     }
 
-    nav_initialized_atoz = true;
+    last_atoz_screen = ui_AtoZKeyboardScreen;
     ESP_LOGD(TAG, "AtoZ nav ready");
 }
 
-static void setup_cursor_key(lv_obj_t *panel, const char *name)
+static void setup_cursor_key(lv_obj_t *obj, const char *name)
 {
-    if (panel) {
-        lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(panel, cursor_key_cb, LV_EVENT_CLICKED, NULL);
+    if (obj) {
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(obj, cursor_key_cb, LV_EVENT_RELEASED, NULL);
         ESP_LOGD(TAG, "CursorKey: %s", name);
     }
 }
 
 static void setup_cursor_nav(void)
 {
-    if (nav_initialized_cursor) return;
-
-    // Navigation buttons
+    // Navigation buttons - attach to images/labels inside panels
     setup_panel_nav(ui_Image6, nav_to_menu, "Cursor:Image6->Menu");
-    setup_panel_nav(ui_Panel31, nav_to_atoz_keyboard, "Cursor:Panel31->AtoZ");
-    setup_panel_nav(ui_Panel36, nav_to_jp_keyboard, "Cursor:Panel36->JP");
+    setup_panel_nav(ui_Label22, nav_to_atoz_keyboard, "Cursor:Label22->AtoZ");
+    setup_panel_nav(ui_Label27, nav_to_jp_keyboard, "Cursor:Label27->JP");
 
-    // Cursor keys
-    setup_cursor_key(ui_Panel22, "ESC");
-    setup_cursor_key(ui_Panel24, "Enter");
-    setup_cursor_key(ui_Panel37, "Up");
-    setup_cursor_key(ui_Panel38, "Left");
-    setup_cursor_key(ui_Panel39, "Down");
-    setup_cursor_key(ui_Panel33, "Right");
-    setup_cursor_key(ui_Panel23, "Paste");
-    setup_cursor_key(ui_Panel28, "Copy");
-    setup_cursor_key(ui_Panel34, "Undo");
-    setup_cursor_key(ui_Panel29, "Redo");
-    setup_cursor_key(ui_Panel35, "Backspace");
+    // Cursor keys - attach to images/labels inside panels
+    setup_cursor_key(ui_Label16, "ESC");
+    setup_cursor_key(ui_Label18, "Enter");
+    setup_cursor_key(ui_Image14, "Up");
+    setup_cursor_key(ui_Image13, "Left");
+    setup_cursor_key(ui_Image15, "Down");
+    setup_cursor_key(ui_Image12, "Right");
+    setup_cursor_key(ui_Label17, "Paste");
+    setup_cursor_key(ui_Label20, "Copy");
+    setup_cursor_key(ui_Label25, "Undo");
+    setup_cursor_key(ui_Label21, "Redo");
+    setup_cursor_key(ui_Label26, "Backspace");
 
-    nav_initialized_cursor = true;
+    last_cursor_screen = ui_CursorScreen;
     ESP_LOGD(TAG, "Cursor nav ready");
 }
 
 static void setup_clock_nav(void)
 {
-    if (nav_initialized_clock) return;
-
     setup_panel_nav(ui_Image11, nav_to_menu, "Clock:Image11->Menu");
 
-    nav_initialized_clock = true;
+    last_clock_screen = ui_AnalogClockWithBackgroud;
     ESP_LOGD(TAG, "Clock nav ready");
 }
 
 static void setup_datetime_nav(void)
 {
-    if (nav_initialized_datetime) return;
-
     if (ui_Back) {
         lv_obj_add_flag(ui_Back, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(ui_Back, nav_to_menu, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(ui_Back, nav_to_menu, LV_EVENT_RELEASED, NULL);
     }
 
-    nav_initialized_datetime = true;
+    last_datetime_screen = ui_DateAndTime;
     ESP_LOGD(TAG, "DateTime nav ready");
 }
 
 static void setup_settings_nav(void)
 {
-    if (nav_initialized_settings) return;
+    // Create back button only if screen changed (destroyed and recreated)
+    if (ui_SettingScreen != last_settings_screen) {
+        setting_back_btn = NULL;  // Reset since old one was destroyed
+    }
 
     if (ui_SettingScreen && !setting_back_btn) {
         setting_back_btn = lv_image_create(ui_SettingScreen);
@@ -808,10 +789,10 @@ static void setup_settings_nav(void)
         lv_obj_set_y(setting_back_btn, -30);
         lv_obj_add_flag(setting_back_btn, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_remove_flag(setting_back_btn, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_event_cb(setting_back_btn, nav_to_menu, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(setting_back_btn, nav_to_menu, LV_EVENT_RELEASED, NULL);
     }
 
-    nav_initialized_settings = true;
+    last_settings_screen = ui_SettingScreen;
     ESP_LOGD(TAG, "Settings nav ready");
 }
 
@@ -821,27 +802,29 @@ static void setup_settings_nav(void)
 
 void ui_navigation_update(void)
 {
-    if (ui_JPKeyboardScreen && !nav_initialized_jp) {
+    // Check if screen objects have been recreated (different pointer = new object)
+    // This handles the case where screen_destroy() is called and screen_init() creates new objects
+    if (ui_JPKeyboardScreen && ui_JPKeyboardScreen != last_jp_screen) {
         setup_jp_keyboard_nav();
     }
 
-    if (ui_AtoZKeyboardScreen && !nav_initialized_atoz) {
+    if (ui_AtoZKeyboardScreen && ui_AtoZKeyboardScreen != last_atoz_screen) {
         setup_atoz_keyboard_nav();
     }
 
-    if (ui_CursorScreen && !nav_initialized_cursor) {
+    if (ui_CursorScreen && ui_CursorScreen != last_cursor_screen) {
         setup_cursor_nav();
     }
 
-    if (ui_AnalogClockWithBackgroud && !nav_initialized_clock) {
+    if (ui_AnalogClockWithBackgroud && ui_AnalogClockWithBackgroud != last_clock_screen) {
         setup_clock_nav();
     }
 
-    if (ui_DateAndTime && !nav_initialized_datetime) {
+    if (ui_DateAndTime && ui_DateAndTime != last_datetime_screen) {
         setup_datetime_nav();
     }
 
-    if (ui_SettingScreen && !nav_initialized_settings) {
+    if (ui_SettingScreen && ui_SettingScreen != last_settings_screen) {
         setup_settings_nav();
     }
 }
@@ -857,30 +840,30 @@ static void nav_timer_cb(lv_timer_t *timer)
 
 void ui_navigation_init(void)
 {
-    // Menu Screen navigation
+    // Menu Screen navigation - use LV_EVENT_RELEASED for reliable touch detection
     if (ui_KeyBoards) {
         lv_obj_add_flag(ui_KeyBoards, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(ui_KeyBoards, nav_to_jp_keyboard, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(ui_KeyBoards, nav_to_jp_keyboard, LV_EVENT_RELEASED, NULL);
     }
 
     if (ui_Clock) {
         lv_obj_add_flag(ui_Clock, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(ui_Clock, nav_to_clock, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(ui_Clock, nav_to_clock, LV_EVENT_RELEASED, NULL);
     }
 
     if (ui_PowerOnPC) {
         lv_obj_add_flag(ui_PowerOnPC, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(ui_PowerOnPC, nav_power_on_pc, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(ui_PowerOnPC, nav_power_on_pc, LV_EVENT_RELEASED, NULL);
     }
 
     if (ui_LightOn) {
         lv_obj_add_flag(ui_LightOn, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(ui_LightOn, nav_light_on, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(ui_LightOn, nav_light_on, LV_EVENT_RELEASED, NULL);
     }
 
     if (ui_Setthing) {
         lv_obj_add_flag(ui_Setthing, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(ui_Setthing, nav_to_settings, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(ui_Setthing, nav_to_settings, LV_EVENT_RELEASED, NULL);
     }
 
     // Timer for lazy screen navigation setup
