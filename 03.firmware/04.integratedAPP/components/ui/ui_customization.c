@@ -240,6 +240,10 @@ static void customize_settings(void)
 
 /**
  * @brief Draw a triangular clock hand
+ *
+ * Fixed: Ensure minimum base offset to prevent degenerate triangles
+ * at horizontal angles (e.g., 59s, 1s, 29s, 31s where perpendicular
+ * offset rounds to 0 in one dimension).
  */
 static void draw_clock_hand(lv_layer_t *layer, int32_t cx, int32_t cy,
                             float angle_deg, int32_t length, int32_t base_width,
@@ -248,20 +252,39 @@ static void draw_clock_hand(lv_layer_t *layer, int32_t cx, int32_t cy,
     float angle_rad = angle_deg * M_PI / 180.0f;
 
     // Calculate tip point
-    int32_t tip_x = cx + (int32_t)(length * cosf(angle_rad));
-    int32_t tip_y = cy + (int32_t)(length * sinf(angle_rad));
+    int32_t tip_x = cx + (int32_t)roundf(length * cosf(angle_rad));
+    int32_t tip_y = cy + (int32_t)roundf(length * sinf(angle_rad));
 
-    // Calculate base points (perpendicular to hand direction)
-    float perp_angle = angle_rad + M_PI / 2.0f;
-    int32_t half_base = base_width / 2;
+    // Calculate perpendicular offset for base points
+    // Perpendicular to hand direction: (-sin, cos) for CCW rotation
+    float half_base = base_width / 2.0f;
+    float perp_x = -sinf(angle_rad) * half_base;
+    float perp_y = cosf(angle_rad) * half_base;
 
-    int32_t base1_x = cx + (int32_t)(half_base * cosf(perp_angle));
-    int32_t base1_y = cy + (int32_t)(half_base * sinf(perp_angle));
+    // Round offsets, but preserve direction when rounding to 0
+    int32_t offset_x = (int32_t)roundf(perp_x);
+    int32_t offset_y = (int32_t)roundf(perp_y);
 
-    int32_t base2_x = cx - (int32_t)(half_base * cosf(perp_angle));
-    int32_t base2_y = cy - (int32_t)(half_base * sinf(perp_angle));
+    // Ensure minimum 1 pixel offset when float value is non-trivial
+    // This prevents visual jumps at angles where offset rounds to 0
+    if (offset_x == 0 && fabsf(perp_x) > 0.1f) {
+        offset_x = (perp_x > 0) ? 1 : -1;
+    }
+    if (offset_y == 0 && fabsf(perp_y) > 0.1f) {
+        offset_y = (perp_y > 0) ? 1 : -1;
+    }
 
-    // Draw triangle
+    // Fallback: ensure at least one offset is non-zero
+    if (offset_x == 0 && offset_y == 0) {
+        offset_y = 1;  // Default to vertical offset
+    }
+
+    int32_t base1_x = cx + offset_x;
+    int32_t base1_y = cy + offset_y;
+    int32_t base2_x = cx - offset_x;
+    int32_t base2_y = cy - offset_y;
+
+    // Draw triangle (winding order is always CCW with this calculation)
     lv_draw_triangle_dsc_t dsc;
     lv_draw_triangle_dsc_init(&dsc);
     dsc.bg_color = color;
