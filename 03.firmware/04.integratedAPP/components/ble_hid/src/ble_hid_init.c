@@ -44,7 +44,8 @@ static const char *TAG = "BLE_HID";
 #define PNP_VERSION             0x0100
 
 #define REPORT_ID_KEYBOARD      1
-#define REPORT_ID_CONSUMER      2
+#define REPORT_ID_MOUSE         2
+#define REPORT_ID_CONSUMER      3
 
 #define ADV_INTERVAL_MIN_MS     30
 #define ADV_INTERVAL_MAX_MS     60
@@ -189,11 +190,67 @@ static const uint8_t hid_report_descriptor[] = {
 
     0xC0,              // End Collection
 
-    // Consumer Control Report (Report ID = 2)
+    // =========================================================================
+    // Mouse Report (Report ID = 2)
+    // =========================================================================
+    0x05, 0x01,        // Usage Page (Generic Desktop)
+    0x09, 0x02,        // Usage (Mouse)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, REPORT_ID_MOUSE,  // Report ID (2)
+    0x09, 0x01,        // Usage (Pointer)
+    0xA1, 0x00,        // Collection (Physical)
+
+    // Buttons (3 bits: Left, Right, Middle)
+    0x05, 0x09,        // Usage Page (Buttons)
+    0x19, 0x01,        // Usage Minimum (1 - Button 1)
+    0x29, 0x03,        // Usage Maximum (3 - Button 3)
+    0x15, 0x00,        // Logical Minimum (0)
+    0x25, 0x01,        // Logical Maximum (1)
+    0x95, 0x03,        // Report Count (3)
+    0x75, 0x01,        // Report Size (1 bit)
+    0x81, 0x02,        // Input (Data, Variable, Absolute)
+    // Padding (5 bits)
+    0x95, 0x01,        // Report Count (1)
+    0x75, 0x05,        // Report Size (5 bits)
+    0x81, 0x01,        // Input (Constant)
+
+    // X, Y movement (relative)
+    0x05, 0x01,        // Usage Page (Generic Desktop)
+    0x09, 0x30,        // Usage (X)
+    0x09, 0x31,        // Usage (Y)
+    0x15, 0x81,        // Logical Minimum (-127)
+    0x25, 0x7F,        // Logical Maximum (127)
+    0x75, 0x08,        // Report Size (8 bits)
+    0x95, 0x02,        // Report Count (2)
+    0x81, 0x06,        // Input (Data, Variable, Relative)
+
+    // Wheel (vertical scroll)
+    0x09, 0x38,        // Usage (Wheel)
+    0x15, 0x81,        // Logical Minimum (-127)
+    0x25, 0x7F,        // Logical Maximum (127)
+    0x75, 0x08,        // Report Size (8 bits)
+    0x95, 0x01,        // Report Count (1)
+    0x81, 0x06,        // Input (Data, Variable, Relative)
+
+    // Horizontal Scroll (AC Pan)
+    0x05, 0x0C,        // Usage Page (Consumer)
+    0x0A, 0x38, 0x02,  // Usage (AC Pan)
+    0x15, 0x81,        // Logical Minimum (-127)
+    0x25, 0x7F,        // Logical Maximum (127)
+    0x75, 0x08,        // Report Size (8 bits)
+    0x95, 0x01,        // Report Count (1)
+    0x81, 0x06,        // Input (Data, Variable, Relative)
+
+    0xC0,              // End Collection (Physical)
+    0xC0,              // End Collection (Application)
+
+    // =========================================================================
+    // Consumer Control Report (Report ID = 3)
+    // =========================================================================
     0x05, 0x0C,        // Usage Page (Consumer)
     0x09, 0x01,        // Usage (Consumer Control)
     0xA1, 0x01,        // Collection (Application)
-    0x85, REPORT_ID_CONSUMER,
+    0x85, REPORT_ID_CONSUMER,  // Report ID (3)
     0x15, 0x00,        // Logical Minimum (0)
     0x26, 0xFF, 0x03,  // Logical Maximum (1023)
     0x19, 0x00,        // Usage Minimum (0)
@@ -211,6 +268,7 @@ static const uint8_t hid_report_descriptor[] = {
 static bool g_initialized = false;
 static bool g_connected = false;
 static bool g_keyboard_subscribed = false;  // Track notification subscription
+static bool g_mouse_subscribed = false;
 static bool g_consumer_subscribed = false;
 static bool g_auto_reconnect = true;         // Auto-reconnect on disconnect
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
@@ -220,6 +278,7 @@ static ble_hid_event_cb_t g_event_callback = NULL;
 
 // GATT characteristic handles
 static uint16_t g_keyboard_handle = 0;
+static uint16_t g_mouse_handle = 0;
 static uint16_t g_consumer_handle = 0;
 
 // ============================================================================
@@ -256,6 +315,7 @@ static const uint8_t pnp_id_value[] = {
 
 static uint8_t keyboard_input_ref[] = { REPORT_ID_KEYBOARD, 0x01 };
 static uint8_t keyboard_output_ref[] = { REPORT_ID_KEYBOARD, 0x02 };
+static uint8_t mouse_input_ref[] = { REPORT_ID_MOUSE, 0x01 };
 static uint8_t consumer_input_ref[] = { REPORT_ID_CONSUMER, 0x01 };
 
 static uint8_t g_battery_level = 100;
@@ -328,7 +388,12 @@ static int gatt_hid_report_access(uint16_t conn_handle, uint16_t attr_handle,
 
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
         uint8_t empty[8] = {0};
-        int size = (report_id == REPORT_ID_KEYBOARD) ? 8 : 2;
+        int size = 2;  // Default for consumer
+        if (report_id == REPORT_ID_KEYBOARD) {
+            size = 8;  // modifier + reserved + 6 keys
+        } else if (report_id == REPORT_ID_MOUSE) {
+            size = 5;  // buttons + X + Y + wheel + pan
+        }
         os_mbuf_append(ctxt->om, empty, size);
         return 0;
     } else if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
@@ -442,6 +507,23 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
                         .uuid = &report_ref_uuid.u,
                         .access_cb = gatt_hid_report_ref_access,
                         .arg = keyboard_output_ref,
+                        .att_flags = BLE_ATT_F_READ,
+                    },
+                    { 0 }
+                },
+            },
+            // Mouse Input Report
+            {
+                .uuid = &hid_report_uuid.u,
+                .access_cb = gatt_hid_report_access,
+                .arg = (void *)(uintptr_t)REPORT_ID_MOUSE,
+                .val_handle = &g_mouse_handle,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                .descriptors = (struct ble_gatt_dsc_def[]) {
+                    {
+                        .uuid = &report_ref_uuid.u,
+                        .access_cb = gatt_hid_report_ref_access,
+                        .arg = mouse_input_ref,
                         .att_flags = BLE_ATT_F_READ,
                     },
                     { 0 }
@@ -576,6 +658,7 @@ static int ble_hid_gap_event(struct ble_gap_event *event, void *arg)
             g_conn_handle = event->connect.conn_handle;
             g_connected = true;
             g_keyboard_subscribed = false;
+            g_mouse_subscribed = false;
             g_consumer_subscribed = false;
 
             if (rc == 0) {
@@ -599,6 +682,7 @@ static int ble_hid_gap_event(struct ble_gap_event *event, void *arg)
                 g_conn_handle = event->connect.conn_handle;
                 g_connected = true;
                 g_keyboard_subscribed = false;
+                g_mouse_subscribed = false;
                 g_consumer_subscribed = false;
 
                 ESP_LOGI(TAG, "Connected (quirk)! peer=%02X:%02X:%02X:%02X:%02X:%02X",
@@ -633,6 +717,7 @@ static int ble_hid_gap_event(struct ble_gap_event *event, void *arg)
         g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         g_connected = false;
         g_keyboard_subscribed = false;
+        g_mouse_subscribed = false;
         g_consumer_subscribed = false;
 
         // Notify callback
@@ -669,6 +754,8 @@ static int ble_hid_gap_event(struct ble_gap_event *event, void *arg)
         // Track notification subscription
         if (event->subscribe.attr_handle == g_keyboard_handle) {
             g_keyboard_subscribed = event->subscribe.cur_notify;
+        } else if (event->subscribe.attr_handle == g_mouse_handle) {
+            g_mouse_subscribed = event->subscribe.cur_notify;
         } else if (event->subscribe.attr_handle == g_consumer_handle) {
             g_consumer_subscribed = event->subscribe.cur_notify;
         }
@@ -1023,6 +1110,36 @@ esp_err_t ble_hid_send_consumer(uint16_t usage)
     om = ble_hs_mbuf_from_flat(report, sizeof(report));
     if (om) {
         ble_gatts_notify_custom(g_conn_handle, g_consumer_handle, om);
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t ble_hid_send_mouse(uint8_t buttons, int8_t dx, int8_t dy,
+                              int8_t wheel, int8_t h_wheel)
+{
+    if (!g_connected || g_mouse_handle == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Mouse report: [buttons, dx, dy, wheel, h_wheel] = 5 bytes
+    uint8_t report[5] = {
+        buttons,
+        (uint8_t)dx,
+        (uint8_t)dy,
+        (uint8_t)wheel,
+        (uint8_t)h_wheel
+    };
+
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(report, sizeof(report));
+    if (!om) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    int rc = ble_gatts_notify_custom(g_conn_handle, g_mouse_handle, om);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Notify mouse failed: %d", rc);
+        return ESP_FAIL;
     }
 
     return ESP_OK;

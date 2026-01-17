@@ -17,12 +17,55 @@
 #include "esp_log.h"
 #include <string.h>
 
+// FreeRTOS
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 // BLE HID
 #include "ble_hid.h"
 #include "ble_hid_keycodes.h"
 #include "flick_input.h"
 
+// BSP Touch for multi-touch support
+#include "bsp/touch.h"
+#include "esp_lcd_touch.h"
+
 static const char *TAG = "UI_NAV";
+
+// ============================================================================
+// Touchpad Configuration
+// ============================================================================
+
+#define TOUCHPAD_TAP_THRESHOLD      12      // Max movement for tap (pixels)
+#define TOUCHPAD_TAP_TIME_MS        300     // Max time for tap (ms)
+#define TOUCHPAD_SCROLL_THRESHOLD   8       // Min accumulated movement for scroll start
+#define TOUCHPAD_PIXELS_PER_SCROLL  15      // Pixels of movement per scroll tick
+#define TOUCHPAD_SENSITIVITY        2       // Mouse movement multiplier
+#define TOUCHPAD_STRENGTH_2FINGER   120     // Strength threshold to detect close 2-fingers
+
+// Touchpad operating mode
+typedef enum {
+    TOUCHPAD_MODE_MOUSE,    // Switch OFF: mouse movement + clicks
+    TOUCHPAD_MODE_SCROLL,   // Switch ON: scroll operations
+} touchpad_mode_t;
+
+// Touchpad gesture state
+typedef struct {
+    touchpad_mode_t mode;
+    lv_point_t start_pos;           // Touch start position
+    lv_point_t last_pos;            // Last touch position (for cursor)
+    lv_point_t scroll_anchor;       // Anchor for scroll calculation
+    int32_t scroll_accum_x;         // Accumulated X movement for scroll
+    int32_t scroll_accum_y;         // Accumulated Y movement for scroll
+    uint8_t initial_finger_count;   // Finger count at touch start
+    uint32_t touch_start_time;      // Touch start timestamp (ms)
+    bool is_active;                 // Currently tracking a touch
+} touchpad_state_t;
+
+static touchpad_state_t g_touchpad_state = {
+    .mode = TOUCHPAD_MODE_MOUSE,
+    .is_active = false
+};
 
 // Forward declarations for screen init functions
 extern void ui_JPKeyboardScreen_screen_init(void);
@@ -91,6 +134,16 @@ extern lv_obj_t *ui_Image5;         // Enter image (inside Panel21)
 
 // AtoZKeyboardScreen
 extern lv_obj_t *ui_OtherKeyboard;  // lv_keyboard widget
+
+// TouchAndScrollPanel (touchpad area on each keyboard screen)
+extern lv_obj_t *ui_TouchAndScrollPanel;    // JPKeyboardScreen
+extern lv_obj_t *ui_TouchAndScrollPanel1;   // AtoZKeyboardScreen
+extern lv_obj_t *ui_TouchAndScrollPanel2;   // CursorScreen
+
+// Mode toggle switches (inside TouchAndScrollPanel)
+extern lv_obj_t *ui_Switch1;    // JPKeyboardScreen
+extern lv_obj_t *ui_Switch2;    // AtoZKeyboardScreen
+extern lv_obj_t *ui_Switch3;    // CursorScreen
 
 // CursorScreen buttons (panels and their clickable children)
 extern lv_obj_t *ui_Panel1;         // Container for Image6
@@ -212,6 +265,271 @@ static void nav_light_on(lv_event_t *e)
     if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
         // Light On - not implemented yet
     }
+}
+
+// ============================================================================
+// Touchpad Event Handlers
+// ============================================================================
+
+/**
+ * @brief Read current finger count from touch controller
+ *
+ * Performs a thread-safe I2C read to get the current multi-touch state.
+ * Also detects close 2-finger touches via strength analysis.
+ */
+static uint8_t touchpad_read_finger_count(void)
+{
+    esp_lcd_touch_handle_t handle = bsp_touch_get_handle();
+    if (!handle) {
+        return 1;  // Fallback to single finger
+    }
+
+    // Read fresh touch data with thread-safe access
+    uint16_t x[5], y[5], strength[5];
+    uint8_t point_num = 0;
+
+    esp_err_t ret = bsp_touch_read_data_safe(
+        handle, x, y, strength, &point_num, 5, pdMS_TO_TICKS(10)
+    );
+
+    if (ret == ESP_OK && point_num > 0) {
+        // Check for close 2-fingers: single point with high strength
+        if (point_num == 1 && strength[0] >= TOUCHPAD_STRENGTH_2FINGER) {
+            ESP_LOGW(TAG, "Touch: 1 point, strength=%d -> treating as 2 fingers", strength[0]);
+            return 2;
+        }
+        ESP_LOGD(TAG, "Touch read: %d fingers, strength[0]=%d", point_num, strength[0]);
+        return point_num;
+    }
+    return 1;
+}
+
+/**
+ * @brief Handle touchpad press start
+ */
+static void touchpad_pressed_cb(lv_event_t *e)
+{
+    lv_point_t point;
+    lv_indev_t *indev = lv_indev_active();
+    lv_indev_get_point(indev, &point);
+
+    g_touchpad_state.start_pos = point;
+    g_touchpad_state.last_pos = point;
+    g_touchpad_state.scroll_anchor = point;
+    g_touchpad_state.scroll_accum_x = 0;
+    g_touchpad_state.scroll_accum_y = 0;
+    g_touchpad_state.initial_finger_count = touchpad_read_finger_count();
+    g_touchpad_state.touch_start_time = lv_tick_get();
+    g_touchpad_state.is_active = true;
+
+    ESP_LOGW(TAG, "Touchpad pressed: fingers=%d, pos=(%ld,%ld)",
+             g_touchpad_state.initial_finger_count, point.x, point.y);
+}
+
+/**
+ * @brief Send proportional scroll based on accumulated movement
+ *
+ * Calculates scroll ticks based on total movement from anchor point.
+ * Updates anchor when scroll is sent to allow continuous scrolling.
+ */
+static void touchpad_send_proportional_scroll(lv_point_t *point)
+{
+    // Calculate total movement from scroll anchor
+    int32_t total_dx = point->x - g_touchpad_state.scroll_anchor.x;
+    int32_t total_dy = point->y - g_touchpad_state.scroll_anchor.y;
+    int32_t abs_dx = (total_dx < 0) ? -total_dx : total_dx;
+    int32_t abs_dy = (total_dy < 0) ? -total_dy : total_dy;
+
+    // Only start scrolling after threshold
+    if (abs_dx < TOUCHPAD_SCROLL_THRESHOLD && abs_dy < TOUCHPAD_SCROLL_THRESHOLD) {
+        return;
+    }
+
+    // Determine primary scroll direction and calculate ticks
+    int8_t wheel = 0, h_wheel = 0;
+
+    if (abs_dy >= abs_dx) {
+        // Vertical scroll
+        int32_t scroll_ticks = total_dy / TOUCHPAD_PIXELS_PER_SCROLL;
+        if (scroll_ticks != 0) {
+            // Traditional scroll direction (swipe down = scroll down)
+            wheel = (int8_t)(scroll_ticks > 127 ? 127 : (scroll_ticks < -127 ? -127 : scroll_ticks));
+            // Update anchor by consumed pixels
+            g_touchpad_state.scroll_anchor.y += scroll_ticks * TOUCHPAD_PIXELS_PER_SCROLL;
+        }
+    } else {
+        // Horizontal scroll
+        int32_t scroll_ticks = total_dx / TOUCHPAD_PIXELS_PER_SCROLL;
+        if (scroll_ticks != 0) {
+            // Inverted horizontal (swipe right = scroll left)
+            h_wheel = (int8_t)(scroll_ticks > 127 ? 127 : (scroll_ticks < -127 ? -127 : -scroll_ticks));
+            // Update anchor by consumed pixels
+            g_touchpad_state.scroll_anchor.x += scroll_ticks * TOUCHPAD_PIXELS_PER_SCROLL;
+        }
+    }
+
+    if (wheel != 0 || h_wheel != 0) {
+        ble_hid_send_mouse(0, 0, 0, wheel, h_wheel);
+    }
+}
+
+/**
+ * @brief Handle touchpad movement (pressing)
+ */
+static void touchpad_pressing_cb(lv_event_t *e)
+{
+    if (!g_touchpad_state.is_active) return;
+
+    lv_point_t point;
+    lv_indev_t *indev = lv_indev_active();
+    lv_indev_get_point(indev, &point);
+
+    int32_t dx = point.x - g_touchpad_state.last_pos.x;
+    int32_t dy = point.y - g_touchpad_state.last_pos.y;
+
+    // Use initial finger count (captured at touch start)
+    uint8_t fingers = g_touchpad_state.initial_finger_count;
+
+    if (g_touchpad_state.mode == TOUCHPAD_MODE_MOUSE) {
+        // Mouse mode: single finger = cursor movement
+        if (fingers == 1 && (dx != 0 || dy != 0)) {
+            // Scale movement for sensitivity
+            int32_t scaled_dx = dx * TOUCHPAD_SENSITIVITY;
+            int32_t scaled_dy = dy * TOUCHPAD_SENSITIVITY;
+
+            // Clamp to valid range
+            if (scaled_dx > 127) scaled_dx = 127;
+            if (scaled_dx < -127) scaled_dx = -127;
+            if (scaled_dy > 127) scaled_dy = 127;
+            if (scaled_dy < -127) scaled_dy = -127;
+
+            if (scaled_dx != 0 || scaled_dy != 0) {
+                ble_hid_send_mouse(0, (int8_t)scaled_dx, (int8_t)scaled_dy, 0, 0);
+            }
+        }
+        // 2-finger movement: proportional scroll
+        else if (fingers >= 2) {
+            touchpad_send_proportional_scroll(&point);
+        }
+    } else {
+        // Scroll mode: any movement = proportional scroll
+        touchpad_send_proportional_scroll(&point);
+    }
+
+    g_touchpad_state.last_pos = point;
+}
+
+/**
+ * @brief Handle touchpad release
+ */
+static void touchpad_released_cb(lv_event_t *e)
+{
+    if (!g_touchpad_state.is_active) return;
+
+    lv_point_t point;
+    lv_indev_t *indev = lv_indev_active();
+    lv_indev_get_point(indev, &point);
+
+    // Calculate total movement
+    int32_t total_dx = point.x - g_touchpad_state.start_pos.x;
+    int32_t total_dy = point.y - g_touchpad_state.start_pos.y;
+    int32_t abs_dx = (total_dx < 0) ? -total_dx : total_dx;
+    int32_t abs_dy = (total_dy < 0) ? -total_dy : total_dy;
+
+    // Calculate duration
+    uint32_t duration = lv_tick_get() - g_touchpad_state.touch_start_time;
+
+    // Check for tap gesture (small movement, short duration)
+    bool is_tap = (abs_dx < TOUCHPAD_TAP_THRESHOLD &&
+                   abs_dy < TOUCHPAD_TAP_THRESHOLD &&
+                   duration < TOUCHPAD_TAP_TIME_MS);
+
+    ESP_LOGW(TAG, "Touchpad released: fingers=%d, movement=(%ld,%ld), duration=%lums, is_tap=%d",
+             g_touchpad_state.initial_finger_count, total_dx, total_dy, (unsigned long)duration, is_tap);
+
+    if (is_tap) {
+        uint8_t button = 0;
+
+        if (g_touchpad_state.mode == TOUCHPAD_MODE_MOUSE) {
+            // Mouse mode tap gestures
+            switch (g_touchpad_state.initial_finger_count) {
+                case 1:
+                    button = MOUSE_BTN_LEFT;
+                    ESP_LOGW(TAG, "Tap gesture: Left click (1 finger)");
+                    break;
+                case 2:
+                    button = MOUSE_BTN_RIGHT;
+                    ESP_LOGW(TAG, "Tap gesture: Right click (2 fingers)");
+                    break;
+                case 3:
+                default:
+                    button = MOUSE_BTN_MIDDLE;
+                    ESP_LOGW(TAG, "Tap gesture: Middle click (%d fingers)",
+                             g_touchpad_state.initial_finger_count);
+                    break;
+            }
+        } else {
+            // Scroll mode: tap = middle click
+            button = MOUSE_BTN_MIDDLE;
+            ESP_LOGW(TAG, "Tap gesture (scroll mode): Middle click");
+        }
+
+        // Send click (press then release)
+        ble_hid_send_mouse(button, 0, 0, 0, 0);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        ble_hid_send_mouse(0, 0, 0, 0, 0);
+    }
+
+    g_touchpad_state.is_active = false;
+}
+
+/**
+ * @brief Handle mode switch toggle
+ */
+static void touchpad_switch_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    bool checked = lv_obj_has_state(sw, LV_STATE_CHECKED);
+
+    g_touchpad_state.mode = checked ? TOUCHPAD_MODE_SCROLL : TOUCHPAD_MODE_MOUSE;
+    ESP_LOGI(TAG, "Touchpad mode: %s", checked ? "SCROLL" : "MOUSE");
+
+    // Sync all switches to same state
+    if (ui_Switch1 && ui_Switch1 != sw) {
+        if (checked) lv_obj_add_state(ui_Switch1, LV_STATE_CHECKED);
+        else lv_obj_remove_state(ui_Switch1, LV_STATE_CHECKED);
+    }
+    if (ui_Switch2 && ui_Switch2 != sw) {
+        if (checked) lv_obj_add_state(ui_Switch2, LV_STATE_CHECKED);
+        else lv_obj_remove_state(ui_Switch2, LV_STATE_CHECKED);
+    }
+    if (ui_Switch3 && ui_Switch3 != sw) {
+        if (checked) lv_obj_add_state(ui_Switch3, LV_STATE_CHECKED);
+        else lv_obj_remove_state(ui_Switch3, LV_STATE_CHECKED);
+    }
+}
+
+/**
+ * @brief Register touchpad event handlers for a TouchAndScrollPanel
+ */
+static void setup_touchpad_panel(lv_obj_t *panel, lv_obj_t *sw)
+{
+    if (!panel) return;
+
+    // Make panel clickable
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+
+    // Register touch events
+    lv_obj_add_event_cb(panel, touchpad_pressed_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(panel, touchpad_pressing_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(panel, touchpad_released_cb, LV_EVENT_RELEASED, NULL);
+
+    // Register switch mode toggle
+    if (sw) {
+        lv_obj_add_event_cb(sw, touchpad_switch_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    }
+
+    ESP_LOGD(TAG, "Touchpad panel setup complete");
 }
 
 // ============================================================================
@@ -719,6 +1037,9 @@ static void setup_jp_keyboard_nav(void)
         ESP_LOGD(TAG, "JP: Symbol panel");
     }
 
+    // Touchpad setup
+    setup_touchpad_panel(ui_TouchAndScrollPanel, ui_Switch1);
+
     last_jp_screen = ui_JPKeyboardScreen;
     ESP_LOGD(TAG, "JPKeyboard nav ready");
 }
@@ -732,6 +1053,9 @@ static void setup_atoz_keyboard_nav(void)
         // Character output
         lv_obj_add_event_cb(ui_OtherKeyboard, atoz_keyboard_char_cb, LV_EVENT_VALUE_CHANGED, NULL);
     }
+
+    // Touchpad setup
+    setup_touchpad_panel(ui_TouchAndScrollPanel1, ui_Switch2);
 
     last_atoz_screen = ui_AtoZKeyboardScreen;
     ESP_LOGD(TAG, "AtoZ nav ready");
@@ -765,6 +1089,9 @@ static void setup_cursor_nav(void)
     setup_cursor_key(ui_Label25, "Undo");
     setup_cursor_key(ui_Label21, "Redo");
     setup_cursor_key(ui_Label26, "Backspace");
+
+    // Touchpad setup
+    setup_touchpad_panel(ui_TouchAndScrollPanel2, ui_Switch3);
 
     last_cursor_screen = ui_CursorScreen;
     ESP_LOGD(TAG, "Cursor nav ready");

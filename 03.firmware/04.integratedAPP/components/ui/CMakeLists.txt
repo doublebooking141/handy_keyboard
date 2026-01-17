@@ -10,4 +10,5 @@ idf_component_register(
     SRCS ${UI_SOURCES}
     INCLUDE_DIRS "." "screens" "fonts" "images" "components"
     REQUIRES lvgl ble_hid
+    PRIV_REQUIRES bsp_jc4880p443c
 )
