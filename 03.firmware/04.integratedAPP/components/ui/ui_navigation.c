@@ -137,6 +137,23 @@ static lv_obj_t *last_settings_screen = NULL;
 // Dynamic elements
 static lv_obj_t *setting_back_btn = NULL;
 
+// BLE Settings UI elements
+static lv_obj_t *ble_status_label = NULL;
+static lv_obj_t *ble_dropdown = NULL;
+static lv_obj_t *ble_connect_btn = NULL;
+static lv_obj_t *ble_connect_label = NULL;
+static lv_obj_t *ble_delete_btn = NULL;
+static lv_obj_t *ble_clear_btn = NULL;
+
+// Bonded device storage for dropdown selection
+#define MAX_BONDED_DEVICES 5
+static uint8_t g_bonded_addrs[MAX_BONDED_DEVICES][6];
+static int g_bonded_count = 0;
+
+// BLE state for UI updates (volatile for cross-task visibility)
+static volatile ble_hid_state_t g_ble_ui_state = BLE_HID_STATE_IDLE;
+static volatile bool g_ble_state_changed = false;
+
 // ============================================================================
 // Navigation Callbacks
 // ============================================================================
@@ -772,14 +789,167 @@ static void setup_datetime_nav(void)
     ESP_LOGD(TAG, "DateTime nav ready");
 }
 
+// ============================================================================
+// BLE Settings UI
+// ============================================================================
+
+/**
+ * @brief Update BLE dropdown with bonded devices
+ */
+static void update_ble_dropdown(void)
+{
+    if (!ble_dropdown) return;
+
+    // Get bonded devices
+    g_bonded_count = ble_hid_get_bonded_devices(g_bonded_addrs, MAX_BONDED_DEVICES);
+
+    // Build dropdown options string
+    static char options[256];
+    options[0] = '\0';
+
+    if (g_bonded_count == 0) {
+        strcpy(options, "(No devices)");
+    } else {
+        int offset = 0;
+        for (int i = 0; i < g_bonded_count; i++) {
+            if (i > 0) {
+                options[offset++] = '\n';
+            }
+            offset += snprintf(options + offset, sizeof(options) - offset,
+                              "%02X:%02X:%02X:%02X:%02X:%02X",
+                              g_bonded_addrs[i][5], g_bonded_addrs[i][4],
+                              g_bonded_addrs[i][3], g_bonded_addrs[i][2],
+                              g_bonded_addrs[i][1], g_bonded_addrs[i][0]);
+        }
+    }
+
+    lv_dropdown_set_options(ble_dropdown, options);
+}
+
+/**
+ * @brief Update BLE status UI based on current state
+ */
+static void update_ble_status_ui(void)
+{
+    if (!ble_status_label || !ble_connect_label) return;
+
+    ble_hid_state_t state = ble_hid_get_state();
+    const char *status_text = "Unknown";
+    const char *btn_text = "Connect";
+
+    switch (state) {
+    case BLE_HID_STATE_CONNECTED:
+        status_text = "Connected";
+        btn_text = "Disconnect";
+        break;
+    case BLE_HID_STATE_ADVERTISING:
+        status_text = "Advertising...";
+        btn_text = "Stop";
+        break;
+    case BLE_HID_STATE_DISCONNECTED:
+    case BLE_HID_STATE_IDLE:
+    default:
+        status_text = "Disconnected";
+        btn_text = "Connect";
+        break;
+    }
+
+    lv_label_set_text(ble_status_label, status_text);
+    lv_label_set_text(ble_connect_label, btn_text);
+
+    // Update dropdown with bonded devices
+    update_ble_dropdown();
+}
+
+/**
+ * @brief BLE event callback (called from BLE task)
+ */
+static void ble_event_callback(ble_hid_state_t state)
+{
+    g_ble_ui_state = state;
+    g_ble_state_changed = true;
+    ESP_LOGI(TAG, "BLE event: state=%d", state);
+}
+
+/**
+ * @brief Connect/disconnect button callback
+ */
+static void ble_connect_btn_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED) return;
+
+    ble_hid_state_t state = ble_hid_get_state();
+
+    if (state == BLE_HID_STATE_CONNECTED) {
+        ESP_LOGI(TAG, "Disconnecting BLE...");
+        ble_hid_disconnect();
+    } else if (state == BLE_HID_STATE_ADVERTISING) {
+        ESP_LOGI(TAG, "Stopping advertising...");
+        ble_hid_stop_advertising();
+    } else {
+        ESP_LOGI(TAG, "Starting advertising...");
+        ble_hid_start_advertising();
+    }
+
+    // Update UI immediately
+    update_ble_status_ui();
+}
+
+/**
+ * @brief Delete selected bond button callback
+ */
+static void ble_delete_bond_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED) return;
+    if (!ble_dropdown || g_bonded_count == 0) return;
+
+    uint32_t selected = lv_dropdown_get_selected(ble_dropdown);
+    if (selected < (uint32_t)g_bonded_count) {
+        ESP_LOGI(TAG, "Deleting bond %lu...", (unsigned long)selected);
+        esp_err_t ret = ble_hid_delete_bond(g_bonded_addrs[selected]);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Bond deleted successfully");
+        } else {
+            ESP_LOGW(TAG, "Failed to delete bond: %s", esp_err_to_name(ret));
+        }
+        update_ble_status_ui();
+    }
+}
+
+/**
+ * @brief Clear all bonds button callback
+ */
+static void ble_clear_bonds_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED) return;
+
+    ESP_LOGI(TAG, "Clearing all bonds...");
+    esp_err_t ret = ble_hid_delete_all_bonds();
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Bonds cleared successfully");
+    } else {
+        ESP_LOGW(TAG, "Failed to clear bonds: %s", esp_err_to_name(ret));
+    }
+
+    // Update UI
+    update_ble_status_ui();
+}
+
 static void setup_settings_nav(void)
 {
-    // Create back button only if screen changed (destroyed and recreated)
+    // Create elements only if screen changed (destroyed and recreated)
     if (ui_SettingScreen != last_settings_screen) {
-        setting_back_btn = NULL;  // Reset since old one was destroyed
+        setting_back_btn = NULL;
+        ble_status_label = NULL;
+        ble_dropdown = NULL;
+        ble_connect_btn = NULL;
+        ble_connect_label = NULL;
+        ble_delete_btn = NULL;
+        ble_clear_btn = NULL;
     }
 
     if (ui_SettingScreen && !setting_back_btn) {
+        // Back button
         setting_back_btn = lv_image_create(ui_SettingScreen);
         lv_image_set_src(setting_back_btn, &ui_img_2026807732);
         lv_obj_set_width(setting_back_btn, LV_SIZE_CONTENT);
@@ -790,6 +960,89 @@ static void setup_settings_nav(void)
         lv_obj_add_flag(setting_back_btn, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_remove_flag(setting_back_btn, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_event_cb(setting_back_btn, nav_to_menu, LV_EVENT_RELEASED, NULL);
+    }
+
+    // Create BLE settings UI in ui_Panel43 (settings content area)
+    if (ui_Panel43 && !ble_status_label) {
+        // Register BLE event callback
+        ble_hid_register_callback(ble_event_callback);
+
+        // Configure Panel43 for vertical layout
+        lv_obj_set_flex_flow(ui_Panel43, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(ui_Panel43, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_row(ui_Panel43, 12, 0);
+        lv_obj_set_style_pad_top(ui_Panel43, 15, 0);
+
+        // BLE Section Title
+        lv_obj_t *ble_title = lv_label_create(ui_Panel43);
+        lv_label_set_text(ble_title, "Bluetooth Settings");
+        lv_obj_set_style_text_font(ble_title, &lv_font_montserrat_18, 0);
+
+        // Status label
+        ble_status_label = lv_label_create(ui_Panel43);
+        lv_label_set_text(ble_status_label, "Checking...");
+        lv_obj_set_style_text_font(ble_status_label, &lv_font_montserrat_16, 0);
+
+        // Bonded devices dropdown label
+        lv_obj_t *dropdown_label = lv_label_create(ui_Panel43);
+        lv_label_set_text(dropdown_label, "Paired Devices:");
+        lv_obj_set_style_text_font(dropdown_label, &lv_font_montserrat_14, 0);
+
+        // Dropdown for device selection
+        ble_dropdown = lv_dropdown_create(ui_Panel43);
+        lv_obj_set_width(ble_dropdown, 220);
+        lv_dropdown_set_options(ble_dropdown, "(No devices)");
+        lv_obj_set_style_text_font(ble_dropdown, &lv_font_montserrat_14, 0);
+
+        // Button container (horizontal)
+        lv_obj_t *btn_container = lv_obj_create(ui_Panel43);
+        lv_obj_set_size(btn_container, 240, 50);
+        lv_obj_set_flex_flow(btn_container, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(btn_container, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_all(btn_container, 0, 0);
+        lv_obj_set_style_bg_opa(btn_container, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(btn_container, 0, 0);
+
+        // Connect/Disconnect button
+        ble_connect_btn = lv_button_create(btn_container);
+        lv_obj_set_size(ble_connect_btn, 110, 40);
+        lv_obj_add_flag(ble_connect_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(ble_connect_btn, ble_connect_btn_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_set_style_bg_color(ble_connect_btn, lv_color_hex(0x2196F3), 0);
+
+        ble_connect_label = lv_label_create(ble_connect_btn);
+        lv_label_set_text(ble_connect_label, "Connect");
+        lv_obj_center(ble_connect_label);
+        lv_obj_set_style_text_font(ble_connect_label, &lv_font_montserrat_14, 0);
+
+        // Delete selected button
+        ble_delete_btn = lv_button_create(btn_container);
+        lv_obj_set_size(ble_delete_btn, 110, 40);
+        lv_obj_add_flag(ble_delete_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(ble_delete_btn, ble_delete_bond_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_set_style_bg_color(ble_delete_btn, lv_color_hex(0xFF9800), 0);
+
+        lv_obj_t *delete_label = lv_label_create(ble_delete_btn);
+        lv_label_set_text(delete_label, "Delete");
+        lv_obj_center(delete_label);
+        lv_obj_set_style_text_font(delete_label, &lv_font_montserrat_14, 0);
+
+        // Clear all bonds button
+        ble_clear_btn = lv_button_create(ui_Panel43);
+        lv_obj_set_size(ble_clear_btn, 180, 40);
+        lv_obj_add_flag(ble_clear_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(ble_clear_btn, ble_clear_bonds_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_set_style_bg_color(ble_clear_btn, lv_color_hex(0xF44336), 0);
+
+        lv_obj_t *clear_label = lv_label_create(ble_clear_btn);
+        lv_label_set_text(clear_label, "Clear All");
+        lv_obj_center(clear_label);
+        lv_obj_set_style_text_font(clear_label, &lv_font_montserrat_14, 0);
+
+        // Initial UI update
+        update_ble_status_ui();
+
+        ESP_LOGI(TAG, "BLE settings UI created");
     }
 
     last_settings_screen = ui_SettingScreen;
@@ -832,6 +1085,12 @@ void ui_navigation_update(void)
 static void nav_timer_cb(lv_timer_t *timer)
 {
     ui_navigation_update();
+
+    // Check for BLE state changes and update UI (thread-safe via LVGL timer)
+    if (g_ble_state_changed) {
+        g_ble_state_changed = false;
+        update_ble_status_ui();
+    }
 }
 
 // ============================================================================

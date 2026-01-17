@@ -123,6 +123,66 @@ bool ble_hid_is_connected(void);
  */
 void ble_hid_register_callback(ble_hid_event_cb_t cb);
 
+// ============================================================================
+// Bond Management APIs
+// ============================================================================
+
+/**
+ * @brief Get number of bonded devices
+ *
+ * @return Number of bonded devices (0 to CONFIG_BT_NIMBLE_MAX_BONDS)
+ */
+int ble_hid_get_bonded_count(void);
+
+/**
+ * @brief Get bonded device addresses
+ *
+ * @param addrs Array to store addresses (caller allocates)
+ * @param max_count Maximum number of addresses to retrieve
+ * @return Number of addresses retrieved
+ */
+int ble_hid_get_bonded_devices(uint8_t addrs[][6], int max_count);
+
+/**
+ * @brief Delete a specific bonded device
+ *
+ * @param addr 6-byte Bluetooth address of device to delete
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_delete_bond(const uint8_t *addr);
+
+/**
+ * @brief Delete all bonded devices
+ *
+ * Clears all bonding information from NVS.
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t ble_hid_delete_all_bonds(void);
+
+/**
+ * @brief Disconnect from current device
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if not connected
+ */
+esp_err_t ble_hid_disconnect(void);
+
+/**
+ * @brief Enable/disable auto-reconnect
+ *
+ * When enabled, automatically starts advertising after disconnection.
+ *
+ * @param enable true to enable, false to disable
+ */
+void ble_hid_set_auto_reconnect(bool enable);
+
+/**
+ * @brief Check if auto-reconnect is enabled
+ *
+ * @return true if auto-reconnect is enabled
+ */
+bool ble_hid_get_auto_reconnect(void);
+
 #ifdef __cplusplus
 }
 #endif
