@@ -7,6 +7,7 @@
 #include "ui_customization.h"
 #include "esp_log.h"
 #include <math.h>
+#include <stdio.h>
 
 static const char *TAG = "UI_CUSTOM";
 
@@ -58,6 +59,12 @@ extern lv_obj_t *ui_HeaderPanel3;
 // AnalogClockWithBackgroud elements
 extern lv_obj_t *ui_AnalogClockWithBackgroud;
 extern lv_obj_t *ui_AnalogClockContainer;
+extern lv_obj_t *ui_DateHolder;  // Analog clock date label
+
+// DateAndTime screen elements
+extern lv_obj_t *ui_DateAndTime;
+extern lv_obj_t *ui_DateHoderLabel;    // Digital clock date (typo in original)
+extern lv_obj_t *ui_TimeHolderLabel;   // Digital clock time
 
 // Track which screens have been customized
 static bool custom_initialized_jp = false;
@@ -68,6 +75,18 @@ static bool custom_initialized_clock = false;
 
 // Clock hands canvas
 static lv_obj_t *clock_canvas = NULL;
+
+// Header elements for each screen (stored for later update)
+typedef struct {
+    lv_obj_t *date_label;
+    lv_obj_t *time_label;
+    lv_obj_t *battery_bar;
+} header_elements_t;
+
+static header_elements_t header_jp = {0};
+static header_elements_t header_atoz = {0};
+static header_elements_t header_cursor = {0};
+static header_elements_t header_settings = {0};
 
 // Clock center and dimensions
 #define CLOCK_CENTER_X  282
@@ -110,8 +129,10 @@ static void apply_highlight_style(lv_obj_t *panel)
 
 /**
  * @brief Create header elements matching Menu style
+ * @param header_panel The header panel to add elements to
+ * @param out_elements Optional pointer to store references for later update
  */
-static void create_header_content(lv_obj_t *header_panel)
+static void create_header_content(lv_obj_t *header_panel, header_elements_t *out_elements)
 {
     if (!header_panel) return;
 
@@ -153,6 +174,13 @@ static void create_header_content(lv_obj_t *header_panel)
         lv_obj_set_style_pad_right(battery_bar,
             lv_obj_get_style_pad_right(battery_bar, LV_PART_MAIN) + 1, LV_PART_MAIN);
     }
+
+    // Store references if requested
+    if (out_elements) {
+        out_elements->date_label = date_label;
+        out_elements->time_label = time_label;
+        out_elements->battery_bar = battery_bar;
+    }
 }
 
 // ============================================================================
@@ -183,7 +211,7 @@ static void customize_jp_keyboard(void)
     apply_highlight_style(ui_Panel15);
     apply_highlight_style(ui_Panel19);
 
-    create_header_content(ui_HeaderPanel);
+    create_header_content(ui_HeaderPanel, &header_jp);
     custom_initialized_jp = true;
     ESP_LOGD(TAG, "JPKeyboard customized");
 }
@@ -196,7 +224,7 @@ static void customize_atoz_keyboard(void)
     if (custom_initialized_atoz) return;
     if (!ui_AtoZKeyboardScreen) return;
 
-    create_header_content(ui_HeaderPanel1);
+    create_header_content(ui_HeaderPanel1, &header_atoz);
     custom_initialized_atoz = true;
     ESP_LOGD(TAG, "AtoZ customized");
 }
@@ -217,7 +245,7 @@ static void customize_cursor(void)
     }
 
     apply_highlight_style(ui_Panel24);
-    create_header_content(ui_HeaderPanel2);
+    create_header_content(ui_HeaderPanel2, &header_cursor);
     custom_initialized_cursor = true;
     ESP_LOGD(TAG, "Cursor customized");
 }
@@ -229,6 +257,11 @@ static void customize_settings(void)
 {
     if (custom_initialized_settings) return;
     if (!ui_SettingScreen) return;
+
+    // Create header for settings screen
+    if (ui_HeaderPanel3) {
+        create_header_content(ui_HeaderPanel3, &header_settings);
+    }
 
     custom_initialized_settings = true;
     ESP_LOGD(TAG, "Settings customized");
@@ -401,11 +434,28 @@ void ui_clock_update_hands(int hour, int minute, int second)
 }
 
 /**
- * @brief Update header with current date/time
+ * @brief Helper to update a single header
+ */
+static void update_header_elements(header_elements_t *h, const char *date_str,
+                                   const char *time_str, int battery_pct)
+{
+    if (h->date_label) {
+        lv_label_set_text(h->date_label, date_str);
+    }
+    if (h->time_label) {
+        lv_label_set_text(h->time_label, time_str);
+    }
+    if (h->battery_bar) {
+        lv_bar_set_value(h->battery_bar, battery_pct, LV_ANIM_OFF);
+    }
+}
+
+/**
+ * @brief Update all headers and clocks with current date/time
  */
 void ui_header_update(const char *date_str, const char *time_str, int battery_pct)
 {
-    // Update Menu header
+    // Update Menu header (original SquareLine-generated elements)
     if (ui_DateHolderLabel) {
         lv_label_set_text(ui_DateHolderLabel, date_str);
     }
@@ -416,7 +466,36 @@ void ui_header_update(const char *date_str, const char *time_str, int battery_pc
         lv_bar_set_value(ui_BatteryBar, battery_pct, LV_ANIM_OFF);
     }
 
-    // TODO: Update other headers when they have similar structure
+    // Update dynamically created headers
+    update_header_elements(&header_jp, date_str, time_str, battery_pct);
+    update_header_elements(&header_atoz, date_str, time_str, battery_pct);
+    update_header_elements(&header_cursor, date_str, time_str, battery_pct);
+    update_header_elements(&header_settings, date_str, time_str, battery_pct);
+
+    // Update Analog Clock calendar
+    if (ui_DateHolder) {
+        // Format for analog clock: "YYYY/MM/DD (Day)  AM/PM"
+        int hour = 0;
+        sscanf(time_str, "%d:", &hour);
+        const char *ampm = (hour < 12) ? "AM" : "PM";
+
+        char clock_date[48];
+        snprintf(clock_date, sizeof(clock_date), "%s  %s", date_str, ampm);
+        lv_label_set_text(ui_DateHolder, clock_date);
+    }
+
+    // Update Digital Clock (DateAndTime screen)
+    if (ui_DateHoderLabel) {
+        lv_label_set_text(ui_DateHoderLabel, date_str);
+    }
+    if (ui_TimeHolderLabel) {
+        // Format time for digital clock: "HH MM" (colons are separate label)
+        int hour = 0, min = 0;
+        sscanf(time_str, "%d:%d", &hour, &min);
+        char digital_time[16];
+        snprintf(digital_time, sizeof(digital_time), "%02d %02d", hour, min);
+        lv_label_set_text(ui_TimeHolderLabel, digital_time);
+    }
 }
 
 /**
