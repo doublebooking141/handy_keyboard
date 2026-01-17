@@ -13,6 +13,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -78,14 +80,26 @@ static void rtc_init(void)
 
     esp_err_t ret = ds3231m_init(i2c_handle, &g_rtc_handle);
     if (ret == ESP_OK) {
-        g_rtc_initialized = true;
-
         struct tm current_time;
         if (ds3231m_get_time(&g_rtc_handle, &current_time) == ESP_OK) {
-            ESP_LOGI(TAG, "RTC time: %04d-%02d-%02d %02d:%02d:%02d",
+            ESP_LOGI(TAG, "DS3231M RTC time: %04d-%02d-%02d %02d:%02d:%02d",
                      1900 + current_time.tm_year, current_time.tm_mon + 1,
                      current_time.tm_mday, current_time.tm_hour,
                      current_time.tm_min, current_time.tm_sec);
+
+            // Set ESP32 internal RTC from DS3231M (read once at startup)
+            // This avoids drift issues caused by frequent I2C queries
+            struct timeval tv;
+            tv.tv_sec = mktime(&current_time);
+            tv.tv_usec = 0;
+            if (settimeofday(&tv, NULL) == 0) {
+                ESP_LOGI(TAG, "ESP32 internal RTC synchronized from DS3231M");
+                g_rtc_initialized = true;
+            } else {
+                ESP_LOGW(TAG, "Failed to set ESP32 internal RTC");
+            }
+        } else {
+            ESP_LOGW(TAG, "Failed to read time from DS3231M");
         }
 
         float temp;
@@ -102,36 +116,42 @@ static const char *WEEKDAY_NAMES[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", 
 
 /**
  * @brief RTC update task - updates UI with current time every second
+ *
+ * Uses ESP32 internal RTC (set from DS3231M at startup) to avoid
+ * drift issues caused by frequent I2C queries to external RTC.
  */
 static void rtc_update_task(void *pvParameters)
 {
     struct tm time_info;
     char date_str[32];
     char time_str[8];
+    time_t now;
 
-    ESP_LOGI(TAG, "RTC update task started");
+    ESP_LOGI(TAG, "RTC update task started (using ESP32 internal RTC)");
 
     while (1) {
         if (g_rtc_initialized) {
-            if (ds3231m_get_time(&g_rtc_handle, &time_info) == ESP_OK) {
-                // Update clock hands (with LVGL lock)
-                if (bsp_display_lock(100)) {
-                    ui_clock_update_hands(time_info.tm_hour, time_info.tm_min, time_info.tm_sec);
+            // Get time from ESP32 internal RTC (not DS3231M)
+            time(&now);
+            localtime_r(&now, &time_info);
 
-                    // Format date: "YYYY/MM/DD (Day)"
-                    snprintf(date_str, sizeof(date_str), "%04d/%02d/%02d (%s)",
-                             1900 + time_info.tm_year, time_info.tm_mon + 1,
-                             time_info.tm_mday, WEEKDAY_NAMES[time_info.tm_wday]);
+            // Update clock hands (with LVGL lock)
+            if (bsp_display_lock(100)) {
+                ui_clock_update_hands(time_info.tm_hour, time_info.tm_min, time_info.tm_sec);
 
-                    // Format time: "HH:MM"
-                    snprintf(time_str, sizeof(time_str), "%02d:%02d",
-                             time_info.tm_hour, time_info.tm_min);
+                // Format date: "YYYY/MM/DD (Day)"
+                snprintf(date_str, sizeof(date_str), "%04d/%02d/%02d (%s)",
+                         1900 + time_info.tm_year, time_info.tm_mon + 1,
+                         time_info.tm_mday, WEEKDAY_NAMES[time_info.tm_wday]);
 
-                    // Update header (battery % is placeholder for now)
-                    ui_header_update(date_str, time_str, 75);
+                // Format time: "HH:MM"
+                snprintf(time_str, sizeof(time_str), "%02d:%02d",
+                         time_info.tm_hour, time_info.tm_min);
 
-                    bsp_display_unlock();
-                }
+                // Update header (battery % is placeholder for now)
+                ui_header_update(date_str, time_str, 75);
+
+                bsp_display_unlock();
             }
         }
 
