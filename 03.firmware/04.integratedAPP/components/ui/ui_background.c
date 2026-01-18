@@ -3,11 +3,13 @@
  * @brief Background image management implementation
  *
  * Uses ESP32-P4 hardware JPEG decoder for fast JPEG loading.
+ * Supports MJPEG video backgrounds using the mjpeg_player component.
  */
 
 #include "ui_background.h"
 #include "ui.h"
 #include "sdcard.h"
+#include "mjpeg_player.h"
 #include "bsp/jc4880p443c.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -99,6 +101,18 @@ static bool is_jpeg_file(const char *filename)
     if (ext == NULL) return false;
     ext++;
     return (strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0);
+}
+
+/**
+ * @brief Check if file is an MJPEG video
+ */
+static bool is_mjpeg_file(const char *filename)
+{
+    if (filename == NULL) return false;
+    const char *ext = strrchr(filename, '.');
+    if (ext == NULL) return false;
+    ext++;
+    return (strcasecmp(ext, "mjpg") == 0 || strcasecmp(ext, "mjpeg") == 0);
 }
 
 /**
@@ -297,6 +311,52 @@ static lv_obj_t *s_last_touchpad3 = NULL;
 static lv_obj_t *s_last_clock_panel = NULL;      // ui_Panel41 (background)
 static lv_obj_t *s_last_clock_container = NULL;  // ui_AnalogClockContainer (overlay)
 
+// MJPEG player handles
+static mjpeg_player_handle_t s_touchpad_mjpeg_player = NULL;
+static mjpeg_player_handle_t s_clock_mjpeg_player = NULL;
+
+// LVGL image widgets for MJPEG playback
+static lv_obj_t *s_touchpad_mjpeg_image = NULL;
+static lv_obj_t *s_clock_mjpeg_image = NULL;
+
+/**
+ * @brief Stop and destroy MJPEG player for touchpad
+ */
+static void stop_touchpad_mjpeg(void)
+{
+    if (s_touchpad_mjpeg_player != NULL) {
+        mjpeg_player_stop(s_touchpad_mjpeg_player);
+        mjpeg_player_destroy(s_touchpad_mjpeg_player);
+        s_touchpad_mjpeg_player = NULL;
+    }
+    if (s_touchpad_mjpeg_image != NULL) {
+        if (bsp_display_lock(100)) {
+            lv_obj_delete(s_touchpad_mjpeg_image);
+            bsp_display_unlock();
+        }
+        s_touchpad_mjpeg_image = NULL;
+    }
+}
+
+/**
+ * @brief Stop and destroy MJPEG player for clock
+ */
+static void stop_clock_mjpeg(void)
+{
+    if (s_clock_mjpeg_player != NULL) {
+        mjpeg_player_stop(s_clock_mjpeg_player);
+        mjpeg_player_destroy(s_clock_mjpeg_player);
+        s_clock_mjpeg_player = NULL;
+    }
+    if (s_clock_mjpeg_image != NULL) {
+        if (bsp_display_lock(100)) {
+            lv_obj_delete(s_clock_mjpeg_image);
+            bsp_display_unlock();
+        }
+        s_clock_mjpeg_image = NULL;
+    }
+}
+
 // External UI objects (from SquareLine generated code)
 extern lv_obj_t *ui_TouchAndScrollPanel;    // JPKeyboardScreen
 extern lv_obj_t *ui_TouchAndScrollPanel1;   // AtoZKeyboardScreen
@@ -339,6 +399,9 @@ static void apply_bg_to_panel_with_path(lv_obj_t *panel, const char *lvgl_path)
 
 esp_err_t ui_bg_apply_to_touchpad(const char *path)
 {
+    // Stop any existing MJPEG player
+    stop_touchpad_mjpeg();
+
     // Free previous image data
     free_touchpad_image();
 
@@ -352,10 +415,16 @@ esp_err_t ui_bg_apply_to_touchpad(const char *path)
 
     // Decode image if path provided
     bool use_hw_jpeg = false;
+    bool use_mjpeg = false;
     static char lvgl_path[140] = {0};  // Extra space for "S:" prefix
+    lvgl_path[0] = '\0';
 
     if (s_touchpad_bg_path[0] != '\0') {
-        if (is_jpeg_file(s_touchpad_bg_path)) {
+        if (is_mjpeg_file(s_touchpad_bg_path)) {
+            // Use MJPEG player for video backgrounds
+            use_mjpeg = true;
+            ESP_LOGI(TAG, "Touchpad: using MJPEG player");
+        } else if (is_jpeg_file(s_touchpad_bg_path)) {
             // Use hardware JPEG decoder
             esp_err_t ret = hw_jpeg_decode_file(s_touchpad_bg_path, &s_touchpad_image_dsc, &s_touchpad_image_data);
             if (ret == ESP_OK) {
@@ -372,9 +441,59 @@ esp_err_t ui_bg_apply_to_touchpad(const char *path)
         }
     }
 
-    // Apply to all touchpad panels (they may not exist yet)
+    // Apply to touchpad panel (use first available panel for MJPEG)
     if (bsp_display_lock(100)) {
-        if (use_hw_jpeg) {
+        if (use_mjpeg) {
+            // Create MJPEG player for the first touchpad panel
+            lv_obj_t *target_panel = ui_TouchAndScrollPanel;
+            if (target_panel == NULL) target_panel = ui_TouchAndScrollPanel1;
+            if (target_panel == NULL) target_panel = ui_TouchAndScrollPanel2;
+
+            if (target_panel != NULL) {
+                // Clear any existing background
+                apply_bg_to_panel_with_dsc(target_panel, NULL);
+
+                // Create lv_image widget for MJPEG playback
+                s_touchpad_mjpeg_image = lv_image_create(target_panel);
+                if (s_touchpad_mjpeg_image != NULL) {
+                    lv_obj_set_size(s_touchpad_mjpeg_image, LV_PCT(100), LV_PCT(100));
+                    lv_obj_center(s_touchpad_mjpeg_image);
+                    lv_image_set_inner_align(s_touchpad_mjpeg_image, LV_IMAGE_ALIGN_STRETCH);
+
+                    bsp_display_unlock();
+
+                    // Create MJPEG player (this may take time for indexing)
+                    mjpeg_player_config_t cfg = {
+                        .file_path = s_touchpad_bg_path,
+                        .target_image = s_touchpad_mjpeg_image,
+                        .target_width = 480,
+                        .target_height = 370,
+                        .fps = 24,
+                        .loop = true,
+                        .cancel_check = NULL,
+                        .cancel_user_data = NULL,
+                    };
+                    esp_err_t ret = mjpeg_player_create(&cfg, &s_touchpad_mjpeg_player);
+                    if (ret == ESP_OK) {
+                        mjpeg_player_start(s_touchpad_mjpeg_player);
+                        ESP_LOGI(TAG, "Touchpad MJPEG player started");
+                    } else {
+                        ESP_LOGE(TAG, "Failed to create MJPEG player: %s", esp_err_to_name(ret));
+                        // Clean up on failure
+                        if (bsp_display_lock(100)) {
+                            lv_obj_delete(s_touchpad_mjpeg_image);
+                            s_touchpad_mjpeg_image = NULL;
+                            bsp_display_unlock();
+                        }
+                    }
+
+                    // Re-acquire lock for tracking
+                    if (!bsp_display_lock(100)) {
+                        goto done;
+                    }
+                }
+            }
+        } else if (use_hw_jpeg) {
             apply_bg_to_panel_with_dsc(ui_TouchAndScrollPanel, &s_touchpad_image_dsc);
             apply_bg_to_panel_with_dsc(ui_TouchAndScrollPanel1, &s_touchpad_image_dsc);
             apply_bg_to_panel_with_dsc(ui_TouchAndScrollPanel2, &s_touchpad_image_dsc);
@@ -397,12 +516,16 @@ esp_err_t ui_bg_apply_to_touchpad(const char *path)
         bsp_display_unlock();
     }
 
+done:
     ESP_LOGI(TAG, "Touchpad background: %s", s_touchpad_bg_path[0] ? s_touchpad_bg_path : "(none)");
     return ESP_OK;
 }
 
 esp_err_t ui_bg_apply_to_clock(const char *path)
 {
+    // Stop any existing MJPEG player
+    stop_clock_mjpeg();
+
     // Free previous image data
     free_clock_image();
 
@@ -416,11 +539,16 @@ esp_err_t ui_bg_apply_to_clock(const char *path)
 
     // Decode image if path provided
     bool use_hw_jpeg = false;
+    bool use_mjpeg = false;
     static char lvgl_path[140] = {0};  // Extra space for "S:" prefix
     lvgl_path[0] = '\0';
 
     if (s_clock_bg_path[0] != '\0') {
-        if (is_jpeg_file(s_clock_bg_path)) {
+        if (is_mjpeg_file(s_clock_bg_path)) {
+            // Use MJPEG player for video backgrounds
+            use_mjpeg = true;
+            ESP_LOGI(TAG, "Clock: using MJPEG player");
+        } else if (is_jpeg_file(s_clock_bg_path)) {
             // Use hardware JPEG decoder
             esp_err_t ret = hw_jpeg_decode_file(s_clock_bg_path, &s_clock_image_dsc, &s_clock_image_data);
             if (ret == ESP_OK) {
@@ -440,7 +568,53 @@ esp_err_t ui_bg_apply_to_clock(const char *path)
     if (bsp_display_lock(100)) {
         // Apply background to ui_Panel41 (full-screen panel behind clock)
         if (ui_Panel41) {
-            if (use_hw_jpeg) {
+            if (use_mjpeg) {
+                // Clear any existing background
+                lv_obj_set_style_bg_image_src(ui_Panel41, NULL,
+                                              LV_PART_MAIN | LV_STATE_DEFAULT);
+
+                // Create lv_image widget for MJPEG playback
+                s_clock_mjpeg_image = lv_image_create(ui_Panel41);
+                if (s_clock_mjpeg_image != NULL) {
+                    lv_obj_set_size(s_clock_mjpeg_image, LV_PCT(100), LV_PCT(100));
+                    lv_obj_center(s_clock_mjpeg_image);
+                    lv_image_set_inner_align(s_clock_mjpeg_image, LV_IMAGE_ALIGN_STRETCH);
+                    // Send to back so clock face is on top
+                    lv_obj_move_to_index(s_clock_mjpeg_image, 0);
+
+                    bsp_display_unlock();
+
+                    // Create MJPEG player (this may take time for indexing)
+                    mjpeg_player_config_t cfg = {
+                        .file_path = s_clock_bg_path,
+                        .target_image = s_clock_mjpeg_image,
+                        .target_width = 480,
+                        .target_height = 800,
+                        .fps = 24,
+                        .loop = true,
+                        .cancel_check = NULL,
+                        .cancel_user_data = NULL,
+                    };
+                    esp_err_t ret = mjpeg_player_create(&cfg, &s_clock_mjpeg_player);
+                    if (ret == ESP_OK) {
+                        mjpeg_player_start(s_clock_mjpeg_player);
+                        ESP_LOGI(TAG, "Clock MJPEG player started");
+                    } else {
+                        ESP_LOGE(TAG, "Failed to create MJPEG player: %s", esp_err_to_name(ret));
+                        // Clean up on failure
+                        if (bsp_display_lock(100)) {
+                            lv_obj_delete(s_clock_mjpeg_image);
+                            s_clock_mjpeg_image = NULL;
+                            bsp_display_unlock();
+                        }
+                    }
+
+                    // Re-acquire lock for rest of function
+                    if (!bsp_display_lock(100)) {
+                        goto clock_done;
+                    }
+                }
+            } else if (use_hw_jpeg) {
                 lv_obj_set_style_bg_image_src(ui_Panel41, &s_clock_image_dsc,
                                               LV_PART_MAIN | LV_STATE_DEFAULT);
                 lv_obj_set_style_bg_image_opa(ui_Panel41, LV_OPA_COVER,
@@ -470,6 +644,7 @@ esp_err_t ui_bg_apply_to_clock(const char *path)
         bsp_display_unlock();
     }
 
+clock_done:
     ESP_LOGI(TAG, "Clock background: %s", s_clock_bg_path[0] ? s_clock_bg_path : "(default)");
     return ESP_OK;
 }
