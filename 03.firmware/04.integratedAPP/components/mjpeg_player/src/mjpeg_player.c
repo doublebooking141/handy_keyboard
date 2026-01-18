@@ -30,7 +30,7 @@ static const char *TAG = "MJPEG_PLAYER";
 
 /** Task configuration */
 #define MJPEG_TASK_STACK_SIZE  8192
-#define MJPEG_TASK_PRIORITY    5
+#define MJPEG_TASK_PRIORITY    7  // Higher priority for smoother playback
 
 // ============================================================================
 // Shared JPEG Decoder (Singleton)

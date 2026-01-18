@@ -39,11 +39,13 @@ static bool is_image_file(const char *filename)
         return false;
     }
 
-    // Supported formats (LVGL can decode these)
+    // Supported formats (LVGL can decode these + MJPEG video)
     return (strcasecmp(ext, ".jpg") == 0 ||
             strcasecmp(ext, ".jpeg") == 0 ||
             strcasecmp(ext, ".png") == 0 ||
-            strcasecmp(ext, ".bmp") == 0);
+            strcasecmp(ext, ".bmp") == 0 ||
+            strcasecmp(ext, ".mjpg") == 0 ||
+            strcasecmp(ext, ".mjpeg") == 0);
 }
 
 /**
