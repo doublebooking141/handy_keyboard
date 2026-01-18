@@ -12,4 +12,5 @@ idf_component_register(
         bsp_jc4880p443c
         ui
         ble_hid
+        sdcard
 )

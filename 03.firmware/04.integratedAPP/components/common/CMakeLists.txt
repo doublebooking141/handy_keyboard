@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "src/logger.c"
+        "src/event_queue.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        freertos
+        esp_timer
+)

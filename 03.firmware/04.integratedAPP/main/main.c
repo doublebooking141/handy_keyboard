@@ -40,6 +40,10 @@
 #include "ui_navigation.h"
 #include "ui_customization.h"
 
+// SD Card and Background management
+#include "sdcard.h"
+#include "ui_background.h"
+
 static const char *TAG = "HANDY_KEYBOARD";
 
 // LVGL display handle
@@ -175,6 +179,15 @@ void app_main(void)
     ESP_LOGI(TAG, "ESP32-P4 initialized");
     ESP_LOGI(TAG, "Free heap: %lu bytes", esp_get_free_heap_size());
 
+    // Initialize hardware JPEG decoder early (requires internal DMA memory)
+    // Must be done before display init consumes internal memory
+    ESP_LOGI(TAG, "Initializing hardware JPEG decoder...");
+    esp_err_t jpeg_ret = ui_bg_init_jpeg_decoder();
+    if (jpeg_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Hardware JPEG decoder init failed: %s (will use software decoder)",
+                 esp_err_to_name(jpeg_ret));
+    }
+
     // Initialize BSP (Display, Touch, I2C, Audio)
     ESP_LOGI(TAG, "Initializing BSP...");
     g_display = bsp_display_start();
@@ -186,6 +199,21 @@ void app_main(void)
 
     // Turn on backlight
     bsp_display_backlight_on();
+
+    // Initialize BLE HID keyboard first (this ensures ESP-Hosted SDIO is fully configured
+    // before SD card mount, as both share the SDMMC host controller)
+    ESP_LOGI(TAG, "Initializing BLE HID...");
+    esp_err_t ble_ret = ble_hid_init();
+    if (ble_ret != ESP_OK) {
+        ESP_LOGW(TAG, "BLE HID init failed: %s", esp_err_to_name(ble_ret));
+    } else {
+        ESP_LOGI(TAG, "BLE HID initialized - device is now discoverable");
+    }
+
+    // Initialize SD card (optional - continues even if SD not present)
+    // Note: Must be after BLE HID init to avoid SDMMC host conflicts with ESP-Hosted
+    ESP_LOGI(TAG, "Initializing SD card...");
+    sdcard_init();
 
     // Initialize RTC using BSP I2C handle
     rtc_init();
@@ -201,18 +229,14 @@ void app_main(void)
         ESP_LOGE(TAG, "Failed to acquire display lock for UI creation");
     }
 
+    // Load saved background settings from NVS and apply to UI
+    if (sdcard_is_available()) {
+        ui_bg_load_saved_settings();
+    }
+
     // Start RTC update task (updates clock hands and header every second)
     if (g_rtc_initialized) {
         xTaskCreate(rtc_update_task, "rtc_update", 4096, NULL, 5, NULL);
-    }
-
-    // Initialize BLE HID keyboard
-    ESP_LOGI(TAG, "Initializing BLE HID...");
-    esp_err_t ble_ret = ble_hid_init();
-    if (ble_ret != ESP_OK) {
-        ESP_LOGW(TAG, "BLE HID init failed: %s", esp_err_to_name(ble_ret));
-    } else {
-        ESP_LOGI(TAG, "BLE HID initialized - device is now discoverable");
     }
 
     ESP_LOGI(TAG, "Initialization complete");
