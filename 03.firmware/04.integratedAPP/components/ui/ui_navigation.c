@@ -30,6 +30,10 @@
 #include "bsp/touch.h"
 #include "esp_lcd_touch.h"
 
+// Alarm UI
+#include "ui_alarm.h"
+#include "alarm.h"
+
 static const char *TAG = "UI_NAV";
 
 // ============================================================================
@@ -206,6 +210,10 @@ static int g_bonded_count = 0;
 // BLE state for UI updates (volatile for cross-task visibility)
 static volatile ble_hid_state_t g_ble_ui_state = BLE_HID_STATE_IDLE;
 static volatile bool g_ble_state_changed = false;
+
+// Alarm state for UI updates (volatile for cross-task visibility)
+static volatile bool g_alarm_triggered = false;
+static volatile uint8_t g_alarm_triggered_index = 0xFF;
 
 // ============================================================================
 // Navigation Callbacks
@@ -1199,6 +1207,27 @@ static void ble_event_callback(ble_hid_state_t state)
 }
 
 /**
+ * @brief Alarm event callback (called from alarm check)
+ */
+static void alarm_event_callback(alarm_event_t event, uint8_t index, void *user_data)
+{
+    (void)user_data;
+
+    if (event == ALARM_EVENT_TRIGGERED) {
+        g_alarm_triggered = true;
+        g_alarm_triggered_index = index;
+        ESP_LOGI(TAG, "Alarm event: triggered, index=%d", index);
+    } else if (event == ALARM_EVENT_DISMISSED || event == ALARM_EVENT_SNOOZED ||
+               event == ALARM_EVENT_EXPIRED) {
+        g_alarm_triggered = false;
+        g_alarm_triggered_index = 0xFF;
+        ESP_LOGI(TAG, "Alarm event: %s, index=%d",
+                 event == ALARM_EVENT_DISMISSED ? "dismissed" :
+                 event == ALARM_EVENT_SNOOZED ? "snoozed" : "expired", index);
+    }
+}
+
+/**
  * @brief Connect/disconnect button callback
  */
 static void ble_connect_btn_cb(lv_event_t *e)
@@ -1372,6 +1401,23 @@ static void setup_settings_nav(void)
         ESP_LOGI(TAG, "BLE settings UI created");
     }
 
+    // Create Alarm settings UI (below BLE settings)
+    static bool alarm_ui_created = false;
+    if (ui_Panel43 && !alarm_ui_created) {
+        // Add separator
+        lv_obj_t *separator = lv_obj_create(ui_Panel43);
+        lv_obj_set_size(separator, 200, 2);
+        lv_obj_set_style_bg_color(separator, lv_color_hex(0x444444), 0);
+        lv_obj_set_style_border_width(separator, 0, 0);
+        lv_obj_set_style_pad_all(separator, 0, 0);
+
+        // Initialize alarm UI in the settings panel
+        ui_alarm_init(ui_Panel43);
+        alarm_ui_created = true;
+
+        ESP_LOGI(TAG, "Alarm settings UI created");
+    }
+
     last_settings_screen = ui_SettingScreen;
     ESP_LOGD(TAG, "Settings nav ready");
 }
@@ -1418,6 +1464,11 @@ static void nav_timer_cb(lv_timer_t *timer)
         g_ble_state_changed = false;
         update_ble_status_ui();
     }
+
+    // Check for alarm trigger and show popup (thread-safe via LVGL timer)
+    if (g_alarm_triggered && !ui_alarm_is_popup_visible()) {
+        ui_alarm_show_trigger_popup(g_alarm_triggered_index);
+    }
 }
 
 // ============================================================================
@@ -1454,6 +1505,9 @@ void ui_navigation_init(void)
 
     // Timer for lazy screen navigation setup
     lv_timer_create(nav_timer_cb, 100, NULL);
+
+    // Register alarm event callback for UI updates
+    alarm_register_callback(alarm_event_callback, NULL);
 
     ESP_LOGI(TAG, "Navigation initialized");
 }

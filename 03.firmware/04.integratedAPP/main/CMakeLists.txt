@@ -13,4 +13,5 @@ idf_component_register(
         ui
         ble_hid
         sdcard
+        alarm
 )

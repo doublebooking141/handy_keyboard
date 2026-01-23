@@ -44,6 +44,9 @@
 #include "sdcard.h"
 #include "ui_background.h"
 
+// Alarm
+#include "alarm.h"
+
 static const char *TAG = "HANDY_KEYBOARD";
 
 // LVGL display handle
@@ -139,6 +142,9 @@ static void rtc_update_task(void *pvParameters)
             time(&now);
             localtime_r(&now, &time_info);
 
+            // Check alarm triggers (called every second)
+            alarm_check_time(&time_info);
+
             // Update clock hands (with LVGL lock)
             if (bsp_display_lock(100)) {
                 ui_clock_update_hands(time_info.tm_hour, time_info.tm_min, time_info.tm_sec);
@@ -217,6 +223,15 @@ void app_main(void)
 
     // Initialize RTC using BSP I2C handle
     rtc_init();
+
+    // Initialize alarm system (uses audio player and NVS)
+    ESP_LOGI(TAG, "Initializing alarm system...");
+    esp_err_t alarm_ret = alarm_init();
+    if (alarm_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Alarm init failed: %s", esp_err_to_name(alarm_ret));
+    } else {
+        ESP_LOGI(TAG, "Alarm system initialized");
+    }
 
     // Initialize SquareLine Studio UI, navigation, and customization
     if (bsp_display_lock(1000)) {
