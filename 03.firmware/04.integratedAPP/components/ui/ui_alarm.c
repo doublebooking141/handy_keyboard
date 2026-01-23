@@ -242,11 +242,13 @@ static void show_edit_dialog(uint8_t index)
     lv_obj_t *title = lv_label_create(s_edit_modal);
     lv_label_set_text(title, index < ALARM_MAX_COUNT ? "Edit Alarm" : "New Alarm");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
 
     // Time label
     lv_obj_t *time_label = lv_label_create(s_edit_modal);
     lv_label_set_text(time_label, "Time:");
     lv_obj_set_style_text_font(time_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(time_label, lv_color_hex(0xFFFFFF), 0);
 
     // Time row with dropdowns
     lv_obj_t *time_row = lv_obj_create(s_edit_modal);
@@ -270,6 +272,7 @@ static void show_edit_dialog(uint8_t index)
     lv_obj_t *colon = lv_label_create(time_row);
     lv_label_set_text(colon, ":");
     lv_obj_set_style_text_font(colon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(colon, lv_color_hex(0xFFFFFF), 0);
 
     // Minute dropdown
     s_minute_dropdown = lv_dropdown_create(time_row);
@@ -283,6 +286,7 @@ static void show_edit_dialog(uint8_t index)
     lv_obj_t *days_label = lv_label_create(s_edit_modal);
     lv_label_set_text(days_label, "Repeat Days:");
     lv_obj_set_style_text_font(days_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(days_label, lv_color_hex(0xFFFFFF), 0);
 
     // Days container (2 rows)
     lv_obj_t *days_container = lv_obj_create(s_edit_modal);
@@ -337,6 +341,7 @@ static void show_edit_dialog(uint8_t index)
     lv_obj_t *sound_label = lv_label_create(s_edit_modal);
     lv_label_set_text(sound_label, "Sound:");
     lv_obj_set_style_text_font(sound_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(sound_label, lv_color_hex(0xFFFFFF), 0);
 
     // Sound dropdown
     s_sound_dropdown = lv_dropdown_create(s_edit_modal);
@@ -370,6 +375,7 @@ static void show_edit_dialog(uint8_t index)
     lv_obj_t *enable_label = lv_label_create(enable_row);
     lv_label_set_text(enable_label, "Enabled");
     lv_obj_set_style_text_font(enable_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(enable_label, lv_color_hex(0xFFFFFF), 0);
 
     s_enable_switch = lv_switch_create(enable_row);
     lv_obj_set_size(s_enable_switch, 60, 30);
@@ -500,7 +506,9 @@ void ui_alarm_update_list(void)
         lv_obj_t *time_label = lv_label_create(item);
         lv_label_set_text(time_label, time_str);
         lv_obj_set_style_text_font(time_label, &lv_font_montserrat_20, 0);
-        if (!alarms[i].enabled) {
+        if (alarms[i].enabled) {
+            lv_obj_set_style_text_color(time_label, lv_color_hex(0xFFFFFF), 0);
+        } else {
             lv_obj_set_style_text_color(time_label, lv_color_hex(0x888888), 0);
         }
 
@@ -590,11 +598,13 @@ void ui_alarm_show_trigger_popup(uint8_t alarm_index)
     snprintf(time_str, sizeof(time_str), "%02d:%02d", alarm.hour, alarm.minute);
     lv_label_set_text(s_trigger_time_label, time_str);
     lv_obj_set_style_text_font(s_trigger_time_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_trigger_time_label, lv_color_hex(0xFFFFFF), 0);
 
     // Alarm label
     lv_obj_t *label = lv_label_create(s_trigger_popup);
     lv_label_set_text(label, "ALARM");
     lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xFF6B6B), 0);
 
     // Button container
     lv_obj_t *btn_container = lv_obj_create(s_trigger_popup);

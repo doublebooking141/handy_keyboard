@@ -1422,6 +1422,7 @@ static void create_bg_settings_ui(lv_obj_t *parent)
     lv_obj_t *bg_title = lv_label_create(parent);
     lv_label_set_text(bg_title, "Background Settings");
     lv_obj_set_style_text_font(bg_title, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(bg_title, lv_color_hex(0xFFFFFF), 0);
 
     // SD card status
     lv_obj_t *sd_status = lv_label_create(parent);
@@ -1440,6 +1441,7 @@ static void create_bg_settings_ui(lv_obj_t *parent)
     lv_obj_t *tp_label = lv_label_create(parent);
     lv_label_set_text(tp_label, "Touchpad Background:");
     lv_obj_set_style_text_font(tp_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(tp_label, lv_color_hex(0xFFFFFF), 0);
 
     // Touchpad background dropdown
     bg_touchpad_dropdown = lv_dropdown_create(parent);
@@ -1462,6 +1464,7 @@ static void create_bg_settings_ui(lv_obj_t *parent)
     lv_obj_t *clock_label = lv_label_create(parent);
     lv_label_set_text(clock_label, "Clock Background:");
     lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(clock_label, lv_color_hex(0xFFFFFF), 0);
 
     // Clock background dropdown
     bg_clock_dropdown = lv_dropdown_create(parent);
