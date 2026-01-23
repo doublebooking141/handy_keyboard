@@ -22,13 +22,27 @@ static lv_obj_t *s_add_btn = NULL;
 
 // Edit dialog elements
 static lv_obj_t *s_edit_modal = NULL;
-static lv_obj_t *s_hour_spinbox = NULL;
-static lv_obj_t *s_minute_spinbox = NULL;
+static lv_obj_t *s_hour_dropdown = NULL;
+static lv_obj_t *s_minute_dropdown = NULL;
 static lv_obj_t *s_day_checkboxes[7] = {NULL};
 static lv_obj_t *s_sound_dropdown = NULL;
 static lv_obj_t *s_enable_switch = NULL;
 static lv_obj_t *s_delete_btn = NULL;
 static uint8_t s_editing_index = 0xFF;
+
+// Hour options (0-23)
+static const char *HOUR_OPTIONS =
+    "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n"
+    "12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23";
+
+// Minute options (0-59)
+static const char *MINUTE_OPTIONS =
+    "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n"
+    "10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n"
+    "20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n"
+    "30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n"
+    "40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n"
+    "50\n51\n52\n53\n54\n55\n56\n57\n58\n59";
 
 // Trigger popup elements
 static lv_obj_t *s_trigger_popup = NULL;
@@ -120,8 +134,8 @@ static void close_edit_dialog(void)
     if (s_edit_modal) {
         lv_obj_delete(s_edit_modal);
         s_edit_modal = NULL;
-        s_hour_spinbox = NULL;
-        s_minute_spinbox = NULL;
+        s_hour_dropdown = NULL;
+        s_minute_dropdown = NULL;
         for (int i = 0; i < 7; i++) {
             s_day_checkboxes[i] = NULL;
         }
@@ -140,9 +154,9 @@ static void save_alarm_cb(lv_event_t *e)
     alarm_entry_t alarm;
     memset(&alarm, 0, sizeof(alarm));
 
-    // Get time
-    alarm.hour = (uint8_t)lv_spinbox_get_value(s_hour_spinbox);
-    alarm.minute = (uint8_t)lv_spinbox_get_value(s_minute_spinbox);
+    // Get time from dropdowns
+    alarm.hour = (uint8_t)lv_dropdown_get_selected(s_hour_dropdown);
+    alarm.minute = (uint8_t)lv_dropdown_get_selected(s_minute_dropdown);
 
     // Get repeat days
     alarm.repeat_days = 0;
@@ -211,63 +225,68 @@ static void show_edit_dialog(uint8_t index)
         alarm.enabled = true;
     }
 
-    // Create modal background
+    // Create modal background (larger dialog for better visibility)
     s_edit_modal = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_edit_modal, 280, 420);
+    lv_obj_set_size(s_edit_modal, 400, 600);
     lv_obj_center(s_edit_modal);
     lv_obj_set_style_bg_color(s_edit_modal, lv_color_hex(0x1E1E1E), 0);
     lv_obj_set_style_border_color(s_edit_modal, lv_color_hex(0x444444), 0);
     lv_obj_set_style_border_width(s_edit_modal, 2, 0);
     lv_obj_set_style_radius(s_edit_modal, 12, 0);
-    lv_obj_set_style_pad_all(s_edit_modal, 15, 0);
+    lv_obj_set_style_pad_all(s_edit_modal, 20, 0);
     lv_obj_set_flex_flow(s_edit_modal, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_edit_modal, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(s_edit_modal, 10, 0);
+    lv_obj_set_style_pad_row(s_edit_modal, 15, 0);
 
     // Title
     lv_obj_t *title = lv_label_create(s_edit_modal);
     lv_label_set_text(title, index < ALARM_MAX_COUNT ? "Edit Alarm" : "New Alarm");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
 
-    // Time row
+    // Time label
+    lv_obj_t *time_label = lv_label_create(s_edit_modal);
+    lv_label_set_text(time_label, "Time:");
+    lv_obj_set_style_text_font(time_label, &lv_font_montserrat_18, 0);
+
+    // Time row with dropdowns
     lv_obj_t *time_row = lv_obj_create(s_edit_modal);
-    lv_obj_set_size(time_row, 250, 60);
+    lv_obj_set_size(time_row, 360, 80);
     lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_bg_opa(time_row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(time_row, 0, 0);
     lv_obj_set_style_pad_all(time_row, 5, 0);
-    lv_obj_set_style_pad_column(time_row, 10, 0);
+    lv_obj_set_style_pad_column(time_row, 15, 0);
 
-    // Hour spinbox
-    s_hour_spinbox = lv_spinbox_create(time_row);
-    lv_spinbox_set_range(s_hour_spinbox, 0, 23);
-    lv_spinbox_set_digit_format(s_hour_spinbox, 2, 0);
-    lv_spinbox_set_value(s_hour_spinbox, alarm.hour);
-    lv_obj_set_width(s_hour_spinbox, 70);
-    lv_obj_set_style_text_font(s_hour_spinbox, &lv_font_montserrat_24, 0);
+    // Hour dropdown
+    s_hour_dropdown = lv_dropdown_create(time_row);
+    lv_dropdown_set_options(s_hour_dropdown, HOUR_OPTIONS);
+    lv_dropdown_set_selected(s_hour_dropdown, alarm.hour);
+    lv_obj_set_width(s_hour_dropdown, 120);
+    lv_obj_set_style_text_font(s_hour_dropdown, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_hour_dropdown, &lv_font_montserrat_20, LV_PART_INDICATOR);
 
     // Colon
     lv_obj_t *colon = lv_label_create(time_row);
     lv_label_set_text(colon, ":");
     lv_obj_set_style_text_font(colon, &lv_font_montserrat_24, 0);
 
-    // Minute spinbox
-    s_minute_spinbox = lv_spinbox_create(time_row);
-    lv_spinbox_set_range(s_minute_spinbox, 0, 59);
-    lv_spinbox_set_digit_format(s_minute_spinbox, 2, 0);
-    lv_spinbox_set_value(s_minute_spinbox, alarm.minute);
-    lv_obj_set_width(s_minute_spinbox, 70);
-    lv_obj_set_style_text_font(s_minute_spinbox, &lv_font_montserrat_24, 0);
+    // Minute dropdown
+    s_minute_dropdown = lv_dropdown_create(time_row);
+    lv_dropdown_set_options(s_minute_dropdown, MINUTE_OPTIONS);
+    lv_dropdown_set_selected(s_minute_dropdown, alarm.minute);
+    lv_obj_set_width(s_minute_dropdown, 120);
+    lv_obj_set_style_text_font(s_minute_dropdown, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_minute_dropdown, &lv_font_montserrat_20, LV_PART_INDICATOR);
 
     // Days label
     lv_obj_t *days_label = lv_label_create(s_edit_modal);
-    lv_label_set_text(days_label, "Repeat:");
-    lv_obj_set_style_text_font(days_label, &lv_font_montserrat_14, 0);
+    lv_label_set_text(days_label, "Repeat Days:");
+    lv_obj_set_style_text_font(days_label, &lv_font_montserrat_18, 0);
 
     // Days row
     lv_obj_t *days_row = lv_obj_create(s_edit_modal);
-    lv_obj_set_size(days_row, 250, 35);
+    lv_obj_set_size(days_row, 360, 50);
     lv_obj_set_flex_flow(days_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(days_row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_bg_opa(days_row, LV_OPA_TRANSP, 0);
@@ -277,7 +296,8 @@ static void show_edit_dialog(uint8_t index)
     for (int i = 0; i < 7; i++) {
         s_day_checkboxes[i] = lv_checkbox_create(days_row);
         lv_checkbox_set_text(s_day_checkboxes[i], DAY_NAMES[i]);
-        lv_obj_set_style_text_font(s_day_checkboxes[i], &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(s_day_checkboxes[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_day_checkboxes[i], lv_color_hex(0xFFFFFF), 0);
         if (alarm.repeat_days & (1 << i)) {
             lv_obj_add_state(s_day_checkboxes[i], LV_STATE_CHECKED);
         }
@@ -286,12 +306,12 @@ static void show_edit_dialog(uint8_t index)
     // Sound label
     lv_obj_t *sound_label = lv_label_create(s_edit_modal);
     lv_label_set_text(sound_label, "Sound:");
-    lv_obj_set_style_text_font(sound_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(sound_label, &lv_font_montserrat_18, 0);
 
     // Sound dropdown
     s_sound_dropdown = lv_dropdown_create(s_edit_modal);
-    lv_obj_set_width(s_sound_dropdown, 230);
-    lv_obj_set_style_text_font(s_sound_dropdown, &lv_font_montserrat_12, 0);
+    lv_obj_set_width(s_sound_dropdown, 340);
+    lv_obj_set_style_text_font(s_sound_dropdown, &lv_font_montserrat_16, 0);
     update_sound_dropdown();
 
     // Select current sound file
@@ -310,25 +330,26 @@ static void show_edit_dialog(uint8_t index)
 
     // Enable switch row
     lv_obj_t *enable_row = lv_obj_create(s_edit_modal);
-    lv_obj_set_size(enable_row, 230, 40);
+    lv_obj_set_size(enable_row, 340, 50);
     lv_obj_set_flex_flow(enable_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(enable_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_bg_opa(enable_row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(enable_row, 0, 0);
-    lv_obj_set_style_pad_all(enable_row, 5, 0);
+    lv_obj_set_style_pad_all(enable_row, 10, 0);
 
     lv_obj_t *enable_label = lv_label_create(enable_row);
     lv_label_set_text(enable_label, "Enabled");
-    lv_obj_set_style_text_font(enable_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(enable_label, &lv_font_montserrat_18, 0);
 
     s_enable_switch = lv_switch_create(enable_row);
+    lv_obj_set_size(s_enable_switch, 60, 30);
     if (alarm.enabled) {
         lv_obj_add_state(s_enable_switch, LV_STATE_CHECKED);
     }
 
     // Button row
     lv_obj_t *btn_row = lv_obj_create(s_edit_modal);
-    lv_obj_set_size(btn_row, 250, 50);
+    lv_obj_set_size(btn_row, 360, 60);
     lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
@@ -337,29 +358,32 @@ static void show_edit_dialog(uint8_t index)
 
     // Save button
     lv_obj_t *save_btn = lv_button_create(btn_row);
-    lv_obj_set_size(save_btn, 70, 38);
+    lv_obj_set_size(save_btn, 100, 50);
     lv_obj_add_event_cb(save_btn, save_alarm_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_set_style_bg_color(save_btn, lv_color_hex(0x4CAF50), 0);
     lv_obj_t *save_label = lv_label_create(save_btn);
     lv_label_set_text(save_label, "Save");
+    lv_obj_set_style_text_font(save_label, &lv_font_montserrat_18, 0);
     lv_obj_center(save_label);
 
     // Cancel button
     lv_obj_t *cancel_btn = lv_button_create(btn_row);
-    lv_obj_set_size(cancel_btn, 70, 38);
+    lv_obj_set_size(cancel_btn, 100, 50);
     lv_obj_add_event_cb(cancel_btn, cancel_edit_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x757575), 0);
     lv_obj_t *cancel_label = lv_label_create(cancel_btn);
     lv_label_set_text(cancel_label, "Cancel");
+    lv_obj_set_style_text_font(cancel_label, &lv_font_montserrat_18, 0);
     lv_obj_center(cancel_label);
 
     // Delete button
     s_delete_btn = lv_button_create(btn_row);
-    lv_obj_set_size(s_delete_btn, 70, 38);
+    lv_obj_set_size(s_delete_btn, 100, 50);
     lv_obj_add_event_cb(s_delete_btn, delete_alarm_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_set_style_bg_color(s_delete_btn, lv_color_hex(0xF44336), 0);
     lv_obj_t *delete_label = lv_label_create(s_delete_btn);
     lv_label_set_text(delete_label, "Delete");
+    lv_obj_set_style_text_font(delete_label, &lv_font_montserrat_18, 0);
     lv_obj_center(delete_label);
 }
 
