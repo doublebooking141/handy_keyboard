@@ -1518,11 +1518,13 @@ static void setup_settings_nav(void)
         // Register BLE event callback
         ble_hid_register_callback(ble_event_callback);
 
-        // Configure Panel43 for vertical layout
+        // Configure Panel43 for vertical layout with scrolling
         lv_obj_set_flex_flow(ui_Panel43, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(ui_Panel43, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_row(ui_Panel43, 12, 0);
         lv_obj_set_style_pad_top(ui_Panel43, 15, 0);
+        lv_obj_set_style_pad_bottom(ui_Panel43, 30, 0);  // Bottom padding for scroll
+        lv_obj_add_flag(ui_Panel43, LV_OBJ_FLAG_SCROLLABLE);  // Enable scrolling
 
         // BLE Section Title
         lv_obj_t *ble_title = lv_label_create(ui_Panel43);
