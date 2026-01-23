@@ -34,6 +34,10 @@
 #include "ui_alarm.h"
 #include "alarm.h"
 
+// Background settings
+#include "sdcard.h"
+#include "ui_background.h"
+
 static const char *TAG = "UI_NAV";
 
 // ============================================================================
@@ -214,6 +218,16 @@ static volatile bool g_ble_state_changed = false;
 // Alarm state for UI updates (volatile for cross-task visibility)
 static volatile bool g_alarm_triggered = false;
 static volatile uint8_t g_alarm_triggered_index = 0xFF;
+
+// Background Settings UI elements
+static lv_obj_t *bg_touchpad_dropdown = NULL;
+static lv_obj_t *bg_clock_dropdown = NULL;
+static bool bg_ui_created = false;
+
+// Background file list storage
+#define MAX_BG_FILES 32
+static sdcard_file_t s_bg_files[MAX_BG_FILES];
+static size_t s_bg_file_count = 0;
 
 // ============================================================================
 // Navigation Callbacks
@@ -1291,6 +1305,184 @@ static void ble_clear_bonds_cb(lv_event_t *e)
     update_ble_status_ui();
 }
 
+// ============================================================================
+// Background Settings Functions
+// ============================================================================
+
+/**
+ * @brief Scan background files from SD card and update dropdown options
+ */
+static void update_bg_dropdown_options(void)
+{
+    if (!sdcard_is_available()) {
+        s_bg_file_count = 0;
+        return;
+    }
+
+    esp_err_t ret = sdcard_list_backgrounds(s_bg_files, MAX_BG_FILES, &s_bg_file_count);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to list backgrounds: %s", esp_err_to_name(ret));
+        s_bg_file_count = 0;
+    }
+
+    ESP_LOGI(TAG, "Found %zu background files", s_bg_file_count);
+}
+
+/**
+ * @brief Build dropdown options string from file list
+ */
+static void build_bg_options_string(char *buf, size_t buf_len, bool include_default)
+{
+    int offset = 0;
+
+    // First option
+    if (include_default) {
+        offset += snprintf(buf + offset, buf_len - offset, "Default");
+    } else {
+        offset += snprintf(buf + offset, buf_len - offset, "None");
+    }
+
+    // Add files
+    for (size_t i = 0; i < s_bg_file_count && offset < (int)buf_len - 1; i++) {
+        offset += snprintf(buf + offset, buf_len - offset, "\n%s", s_bg_files[i].filename);
+    }
+}
+
+/**
+ * @brief Find dropdown index for current background path
+ */
+static uint32_t find_bg_index(const char *current_path)
+{
+    if (!current_path || current_path[0] == '\0') {
+        return 0;  // None/Default
+    }
+
+    for (size_t i = 0; i < s_bg_file_count; i++) {
+        if (strcmp(s_bg_files[i].full_path, current_path) == 0) {
+            return i + 1;  // +1 because index 0 is None/Default
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Touchpad background dropdown callback
+ */
+static void bg_touchpad_changed_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+
+    uint32_t idx = lv_dropdown_get_selected(bg_touchpad_dropdown);
+
+    if (idx == 0) {
+        // None selected
+        sdcard_set_touchpad_bg(SDCARD_BG_NONE);
+        ui_bg_clear_touchpad();
+        ESP_LOGI(TAG, "Touchpad background cleared");
+    } else if (idx <= s_bg_file_count) {
+        const char *path = s_bg_files[idx - 1].full_path;
+        sdcard_set_touchpad_bg(path);
+        ui_bg_apply_to_touchpad(path);
+        ESP_LOGI(TAG, "Touchpad background set: %s", path);
+    }
+}
+
+/**
+ * @brief Clock background dropdown callback
+ */
+static void bg_clock_changed_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+
+    uint32_t idx = lv_dropdown_get_selected(bg_clock_dropdown);
+
+    if (idx == 0) {
+        // Default selected
+        sdcard_set_clock_bg(SDCARD_BG_NONE);
+        ui_bg_clear_clock();
+        ESP_LOGI(TAG, "Clock background set to default");
+    } else if (idx <= s_bg_file_count) {
+        const char *path = s_bg_files[idx - 1].full_path;
+        sdcard_set_clock_bg(path);
+        ui_bg_apply_to_clock(path);
+        ESP_LOGI(TAG, "Clock background set: %s", path);
+    }
+}
+
+/**
+ * @brief Create background settings UI
+ */
+static void create_bg_settings_ui(lv_obj_t *parent)
+{
+    // Scan files first
+    update_bg_dropdown_options();
+
+    // Background Settings Title
+    lv_obj_t *bg_title = lv_label_create(parent);
+    lv_label_set_text(bg_title, "Background Settings");
+    lv_obj_set_style_text_font(bg_title, &lv_font_montserrat_18, 0);
+
+    // SD card status
+    lv_obj_t *sd_status = lv_label_create(parent);
+    if (sdcard_is_available()) {
+        char status_text[64];
+        snprintf(status_text, sizeof(status_text), "SD Card: %zu files found", s_bg_file_count);
+        lv_label_set_text(sd_status, status_text);
+        lv_obj_set_style_text_color(sd_status, lv_color_hex(0x00FF00), 0);
+    } else {
+        lv_label_set_text(sd_status, "SD Card: Not available");
+        lv_obj_set_style_text_color(sd_status, lv_color_hex(0xFF6666), 0);
+    }
+    lv_obj_set_style_text_font(sd_status, &lv_font_montserrat_14, 0);
+
+    // Touchpad background label
+    lv_obj_t *tp_label = lv_label_create(parent);
+    lv_label_set_text(tp_label, "Touchpad Background:");
+    lv_obj_set_style_text_font(tp_label, &lv_font_montserrat_14, 0);
+
+    // Touchpad background dropdown
+    bg_touchpad_dropdown = lv_dropdown_create(parent);
+    lv_obj_set_width(bg_touchpad_dropdown, 280);
+    lv_obj_set_style_text_font(bg_touchpad_dropdown, &lv_font_montserrat_14, 0);
+
+    static char tp_options[1024];
+    build_bg_options_string(tp_options, sizeof(tp_options), false);
+    lv_dropdown_set_options(bg_touchpad_dropdown, tp_options);
+
+    // Select current touchpad background
+    char current_tp_bg[128] = {0};
+    if (sdcard_get_touchpad_bg(current_tp_bg, sizeof(current_tp_bg)) == ESP_OK) {
+        lv_dropdown_set_selected(bg_touchpad_dropdown, find_bg_index(current_tp_bg));
+    }
+
+    lv_obj_add_event_cb(bg_touchpad_dropdown, bg_touchpad_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    // Clock background label
+    lv_obj_t *clock_label = lv_label_create(parent);
+    lv_label_set_text(clock_label, "Clock Background:");
+    lv_obj_set_style_text_font(clock_label, &lv_font_montserrat_14, 0);
+
+    // Clock background dropdown
+    bg_clock_dropdown = lv_dropdown_create(parent);
+    lv_obj_set_width(bg_clock_dropdown, 280);
+    lv_obj_set_style_text_font(bg_clock_dropdown, &lv_font_montserrat_14, 0);
+
+    static char clock_options[1024];
+    build_bg_options_string(clock_options, sizeof(clock_options), true);
+    lv_dropdown_set_options(bg_clock_dropdown, clock_options);
+
+    // Select current clock background
+    char current_clock_bg[128] = {0};
+    if (sdcard_get_clock_bg(current_clock_bg, sizeof(current_clock_bg)) == ESP_OK) {
+        lv_dropdown_set_selected(bg_clock_dropdown, find_bg_index(current_clock_bg));
+    }
+
+    lv_obj_add_event_cb(bg_clock_dropdown, bg_clock_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    ESP_LOGI(TAG, "Background settings UI created");
+}
+
 static void setup_settings_nav(void)
 {
     // Create elements only if screen changed (destroyed and recreated)
@@ -1302,6 +1494,9 @@ static void setup_settings_nav(void)
         ble_connect_label = NULL;
         ble_delete_btn = NULL;
         ble_clear_btn = NULL;
+        bg_touchpad_dropdown = NULL;
+        bg_clock_dropdown = NULL;
+        bg_ui_created = false;
     }
 
     if (ui_SettingScreen && !setting_back_btn) {
@@ -1416,6 +1611,20 @@ static void setup_settings_nav(void)
         alarm_ui_created = true;
 
         ESP_LOGI(TAG, "Alarm settings UI created");
+    }
+
+    // Create Background settings UI (below Alarm settings)
+    if (ui_Panel43 && !bg_ui_created) {
+        // Add separator
+        lv_obj_t *separator2 = lv_obj_create(ui_Panel43);
+        lv_obj_set_size(separator2, 200, 2);
+        lv_obj_set_style_bg_color(separator2, lv_color_hex(0x444444), 0);
+        lv_obj_set_style_border_width(separator2, 0, 0);
+        lv_obj_set_style_pad_all(separator2, 0, 0);
+
+        // Initialize background settings UI
+        create_bg_settings_ui(ui_Panel43);
+        bg_ui_created = true;
     }
 
     last_settings_screen = ui_SettingScreen;
