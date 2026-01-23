@@ -284,17 +284,47 @@ static void show_edit_dialog(uint8_t index)
     lv_label_set_text(days_label, "Repeat Days:");
     lv_obj_set_style_text_font(days_label, &lv_font_montserrat_18, 0);
 
-    // Days row
-    lv_obj_t *days_row = lv_obj_create(s_edit_modal);
-    lv_obj_set_size(days_row, 360, 50);
-    lv_obj_set_flex_flow(days_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(days_row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(days_row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(days_row, 0, 0);
-    lv_obj_set_style_pad_all(days_row, 0, 0);
+    // Days container (2 rows)
+    lv_obj_t *days_container = lv_obj_create(s_edit_modal);
+    lv_obj_set_size(days_container, 360, 90);
+    lv_obj_set_flex_flow(days_container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(days_container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(days_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(days_container, 0, 0);
+    lv_obj_set_style_pad_all(days_container, 0, 0);
+    lv_obj_set_style_pad_row(days_container, 8, 0);
 
+    // Row 1: Mon-Fri
+    lv_obj_t *days_row1 = lv_obj_create(days_container);
+    lv_obj_set_size(days_row1, 360, 40);
+    lv_obj_set_flex_flow(days_row1, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(days_row1, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(days_row1, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(days_row1, 0, 0);
+    lv_obj_set_style_pad_all(days_row1, 0, 0);
+
+    // Row 2: Sat-Sun
+    lv_obj_t *days_row2 = lv_obj_create(days_container);
+    lv_obj_set_size(days_row2, 360, 40);
+    lv_obj_set_flex_flow(days_row2, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(days_row2, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(days_row2, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(days_row2, 0, 0);
+    lv_obj_set_style_pad_all(days_row2, 0, 0);
+    lv_obj_set_style_pad_column(days_row2, 30, 0);
+
+    // Create checkboxes: Mon-Fri on row1, Sat-Sun on row2
+    // DAY_NAMES order: Sun(0), Mon(1), Tue(2), Wed(3), Thu(4), Fri(5), Sat(6)
     for (int i = 0; i < 7; i++) {
-        s_day_checkboxes[i] = lv_checkbox_create(days_row);
+        lv_obj_t *parent_row;
+        if (i == 0 || i == 6) {
+            // Sunday (0) and Saturday (6) go to row 2
+            parent_row = days_row2;
+        } else {
+            // Mon-Fri go to row 1
+            parent_row = days_row1;
+        }
+        s_day_checkboxes[i] = lv_checkbox_create(parent_row);
         lv_checkbox_set_text(s_day_checkboxes[i], DAY_NAMES[i]);
         lv_obj_set_style_text_font(s_day_checkboxes[i], &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(s_day_checkboxes[i], lv_color_hex(0xFFFFFF), 0);
