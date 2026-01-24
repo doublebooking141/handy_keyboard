@@ -6,6 +6,7 @@
  */
 
 #include "mjpeg_player.h"
+#include "shared_jpeg_decoder.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "driver/jpeg_decode.h"
@@ -31,136 +32,6 @@ static const char *TAG = "MJPEG_PLAYER";
 /** Task configuration */
 #define MJPEG_TASK_STACK_SIZE  8192
 #define MJPEG_TASK_PRIORITY    7  // Higher priority for smoother playback
-
-// ============================================================================
-// Shared JPEG Decoder (Singleton)
-// ============================================================================
-// ESP32-P4 hardware JPEG decoder requires internal DMA memory for rxlink.
-// To avoid running out of internal memory, we share a single decoder instance.
-
-static jpeg_decoder_handle_t s_shared_jpeg_decoder = NULL;
-static SemaphoreHandle_t s_decoder_mutex = NULL;
-static int s_decoder_ref_count = 0;
-
-esp_err_t mjpeg_player_init_shared_decoder(void)
-{
-    if (s_decoder_mutex == NULL) {
-        s_decoder_mutex = xSemaphoreCreateMutex();
-        if (s_decoder_mutex == NULL) {
-            ESP_LOGE(TAG, "Failed to create decoder mutex");
-            return ESP_ERR_NO_MEM;
-        }
-    }
-
-    if (s_shared_jpeg_decoder != NULL) {
-        ESP_LOGD(TAG, "Shared JPEG decoder already initialized");
-        return ESP_OK;
-    }
-
-    // Log available internal DMA memory before allocation
-    size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    ESP_LOGD(TAG, "Free internal DMA memory before JPEG init: %u bytes", free_dma);
-
-    jpeg_decode_engine_cfg_t decode_eng_cfg = {
-        .timeout_ms = 100,
-    };
-    esp_err_t ret = jpeg_new_decoder_engine(&decode_eng_cfg, &s_shared_jpeg_decoder);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create shared JPEG decoder: %s", esp_err_to_name(ret));
-        ESP_LOGE(TAG, "Free internal DMA memory: %u bytes (may need more for rxlink)", free_dma);
-        return ret;
-    }
-
-    ESP_LOGD(TAG, "Shared JPEG decoder created successfully");
-    return ESP_OK;
-}
-
-/**
- * @brief Get or create the shared JPEG decoder instance
- * @return ESP_OK on success
- */
-static esp_err_t get_shared_decoder(jpeg_decoder_handle_t *decoder)
-{
-    if (s_decoder_mutex == NULL) {
-        s_decoder_mutex = xSemaphoreCreateMutex();
-        if (s_decoder_mutex == NULL) {
-            return ESP_ERR_NO_MEM;
-        }
-    }
-
-    if (xSemaphoreTake(s_decoder_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-
-    esp_err_t ret = ESP_OK;
-
-    if (s_shared_jpeg_decoder == NULL) {
-        // Try to create the decoder (should have been initialized early)
-        ESP_LOGW(TAG, "Shared JPEG decoder not pre-initialized, creating now");
-
-        size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        ESP_LOGW(TAG, "Free internal DMA memory: %u bytes", free_dma);
-
-        jpeg_decode_engine_cfg_t decode_eng_cfg = {
-            .timeout_ms = 100,
-        };
-        ret = jpeg_new_decoder_engine(&decode_eng_cfg, &s_shared_jpeg_decoder);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to create shared JPEG decoder: %s", esp_err_to_name(ret));
-            xSemaphoreGive(s_decoder_mutex);
-            return ret;
-        }
-        ESP_LOGD(TAG, "Shared JPEG decoder created (late init)");
-    }
-
-    s_decoder_ref_count++;
-    *decoder = s_shared_jpeg_decoder;
-
-    xSemaphoreGive(s_decoder_mutex);
-    return ESP_OK;
-}
-
-/**
- * @brief Release reference to shared JPEG decoder
- */
-static void release_shared_decoder(void)
-{
-    if (s_decoder_mutex == NULL) {
-        return;
-    }
-
-    if (xSemaphoreTake(s_decoder_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        return;
-    }
-
-    s_decoder_ref_count--;
-
-    // Don't delete the decoder even when ref_count reaches 0
-    // Keep it alive to avoid re-allocation issues
-
-    xSemaphoreGive(s_decoder_mutex);
-}
-
-/**
- * @brief Lock shared decoder for exclusive use during decode operation
- */
-static bool lock_shared_decoder(uint32_t timeout_ms)
-{
-    if (s_decoder_mutex == NULL) {
-        return false;
-    }
-    return xSemaphoreTake(s_decoder_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
-}
-
-/**
- * @brief Unlock shared decoder
- */
-static void unlock_shared_decoder(void)
-{
-    if (s_decoder_mutex != NULL) {
-        xSemaphoreGive(s_decoder_mutex);
-    }
-}
 
 /** Frame index entry for seeking */
 typedef struct {
@@ -189,26 +60,21 @@ struct mjpeg_player {
     TaskHandle_t playback_task; /**< Playback task handle */
     volatile bool task_running; /**< Task running flag */
 
-    // Hardware JPEG decoder (reference to shared decoder)
-    jpeg_decoder_handle_t jpeg_decoder; /**< Reference to shared JPEG decoder */
-
     // Input buffer (JPEG data)
     uint8_t *jpeg_buffer;       /**< JPEG input buffer (DMA capable) */
     size_t jpeg_buffer_size;    /**< JPEG buffer allocated size */
 
-    // Output buffer (decoded RGB)
-    uint8_t *rgb_buffer;        /**< RGB output buffer (DMA capable) */
-    size_t rgb_buffer_size;     /**< RGB buffer allocated size */
-
-    lv_image_dsc_t image_dsc;   /**< LVGL image descriptor */
+    // Double buffering for RGB output
+    uint8_t *rgb_buffers[2];    /**< Two RGB output buffers for double buffering */
+    size_t rgb_buffer_size;     /**< Size of each RGB buffer */
+    lv_image_dsc_t image_dscs[2]; /**< LVGL image descriptors for each buffer */
+    volatile uint8_t back_idx;  /**< Index of back buffer (0 or 1) */
 
     mjpeg_frame_index_t *frame_index; /**< Frame index array */
     uint32_t frame_count;       /**< Total number of frames */
     uint32_t current_frame;     /**< Current frame index */
 
     SemaphoreHandle_t mutex;    /**< Thread safety mutex */
-
-    bool owns_decoder;          /**< True if this player owns a decoder reference */
 };
 
 // ============================================================================
@@ -326,7 +192,15 @@ static esp_err_t index_frames_fast(struct mjpeg_player *player)
 }
 
 /**
- * @brief Decode and display a frame using hardware JPEG decoder
+ * @brief Decode and display a frame using hardware JPEG decoder with double buffering
+ *
+ * Double buffering flow:
+ * 1. Decode JPEG to back buffer (no display lock needed)
+ * 2. Acquire display lock briefly
+ * 3. Swap front/back buffers (pointer switch only)
+ * 4. Release display lock
+ *
+ * This minimizes display lock hold time to reduce frame skipping.
  */
 static esp_err_t decode_and_display_frame(struct mjpeg_player *player, uint32_t frame_idx)
 {
@@ -343,7 +217,12 @@ static esp_err_t decode_and_display_frame(struct mjpeg_player *player, uint32_t 
         return ESP_ERR_NO_MEM;
     }
 
-    // Read JPEG frame data
+    // Get current back buffer index (decode target)
+    uint8_t back = player->back_idx;
+    uint8_t *decode_buffer = player->rgb_buffers[back];
+    lv_image_dsc_t *decode_dsc = &player->image_dscs[back];
+
+    // Read JPEG frame data (no lock needed)
     fseek(player->file, frame->offset, SEEK_SET);
     size_t bytes_read = fread(player->jpeg_buffer, 1, frame->size, player->file);
     if (bytes_read != frame->size) {
@@ -375,47 +254,49 @@ static esp_err_t decode_and_display_frame(struct mjpeg_player *player, uint32_t 
     }
 
     // Decode JPEG to RGB565 using hardware decoder (matches display format)
+    // Decoding to back buffer - no display lock needed here
     jpeg_decode_cfg_t decode_cfg = {
         .output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
         .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_BGR,  // Display expects BGR order
     };
 
     // Lock shared decoder for exclusive access during decode
-    if (!lock_shared_decoder(100)) {
+    if (!shared_jpeg_decoder_lock(100)) {
         ESP_LOGW(TAG, "Decoder busy, skipping frame %lu", (unsigned long)frame_idx);
         return ESP_ERR_TIMEOUT;
     }
 
     uint32_t out_size = 0;
     ret = jpeg_decoder_process(
-        player->jpeg_decoder,
+        shared_jpeg_decoder_get_handle(),
         &decode_cfg,
         player->jpeg_buffer,
         frame->size,
-        player->rgb_buffer,
+        decode_buffer,  // Decode to back buffer
         player->rgb_buffer_size,
         &out_size
     );
 
-    unlock_shared_decoder();
+    shared_jpeg_decoder_unlock();
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Hardware JPEG decode failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    // Update LVGL image descriptor with decoded RGB565 data
-    player->image_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-    player->image_dsc.header.w = info.width;
-    player->image_dsc.header.h = info.height;
-    player->image_dsc.header.stride = info.width * 2;  // RGB565 = 2 bytes per pixel
-    player->image_dsc.data_size = out_size;
-    player->image_dsc.data = player->rgb_buffer;
+    // Update back buffer's LVGL image descriptor (no lock needed)
+    decode_dsc->header.cf = LV_COLOR_FORMAT_RGB565;
+    decode_dsc->header.w = info.width;
+    decode_dsc->header.h = info.height;
+    decode_dsc->header.stride = info.width * 2;  // RGB565 = 2 bytes per pixel
+    decode_dsc->data_size = out_size;
+    decode_dsc->data = decode_buffer;
 
-    // Update LVGL image (must be done with display lock)
+    // Brief display lock for buffer swap only
     if (bsp_display_lock(pdMS_TO_TICKS(50))) {
-        lv_image_set_src(player->target_image, &player->image_dsc);
+        lv_image_set_src(player->target_image, decode_dsc);
         lv_obj_invalidate(player->target_image);  // Force redraw
+        player->back_idx = 1 - back;  // Swap buffers (0->1 or 1->0)
         bsp_display_unlock();
     } else {
         ESP_LOGW(TAG, "Display lock timeout, skipping frame %lu", (unsigned long)frame_idx);
@@ -523,13 +404,12 @@ esp_err_t mjpeg_player_create(const mjpeg_player_config_t *config, mjpeg_player_
     player->cancel_check = config->cancel_check;
     player->cancel_user_data = config->cancel_user_data;
 
-    // Get reference to shared JPEG decoder (singleton pattern)
-    ret = get_shared_decoder(&player->jpeg_decoder);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get shared JPEG decoder: %s", esp_err_to_name(ret));
+    // Verify shared JPEG decoder is initialized
+    if (!shared_jpeg_decoder_is_initialized()) {
+        ESP_LOGE(TAG, "Shared JPEG decoder not initialized - call shared_jpeg_decoder_init() first");
+        ret = ESP_ERR_INVALID_STATE;
         goto cleanup;
     }
-    player->owns_decoder = true;
 
     // Allocate DMA-capable JPEG input buffer
     jpeg_decode_memory_alloc_cfg_t tx_mem_cfg = {
@@ -542,7 +422,7 @@ esp_err_t mjpeg_player_create(const mjpeg_player_config_t *config, mjpeg_player_
         goto cleanup;
     }
 
-    // Allocate DMA-capable RGB output buffer (RGB565: 2 bytes per pixel)
+    // Allocate DMA-capable RGB output buffers (double buffering)
     // Use larger dimension to handle both landscape and portrait videos
     // Also align to 16-byte boundaries as required by hardware JPEG decoder
     size_t max_dim = (player->target_width > player->target_height) ? player->target_width : player->target_height;
@@ -551,14 +431,23 @@ esp_err_t mjpeg_player_create(const mjpeg_player_config_t *config, mjpeg_player_
     jpeg_decode_memory_alloc_cfg_t rx_mem_cfg = {
         .buffer_direction = JPEG_DEC_ALLOC_OUTPUT_BUFFER,
     };
-    player->rgb_buffer = (uint8_t *)jpeg_alloc_decoder_mem(rgb_size, &rx_mem_cfg, &player->rgb_buffer_size);
-    if (player->rgb_buffer == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate RGB output buffer");
-        ret = ESP_ERR_NO_MEM;
-        goto cleanup;
-    }
 
-    ESP_LOGD(TAG, "Allocated buffers: JPEG=%lu, RGB=%lu",
+    // Allocate two RGB buffers for double buffering
+    for (int i = 0; i < 2; i++) {
+        size_t actual_size = 0;
+        player->rgb_buffers[i] = (uint8_t *)jpeg_alloc_decoder_mem(rgb_size, &rx_mem_cfg, &actual_size);
+        if (player->rgb_buffers[i] == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate RGB output buffer %d", i);
+            ret = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+        if (i == 0) {
+            player->rgb_buffer_size = actual_size;
+        }
+    }
+    player->back_idx = 0;  // Start with buffer 0 as back buffer
+
+    ESP_LOGD(TAG, "Allocated buffers: JPEG=%lu, RGB=%lux2 (double buffering)",
              (unsigned long)player->jpeg_buffer_size, (unsigned long)player->rgb_buffer_size);
 
     // Index frames (using fast buffered method)
@@ -594,11 +483,10 @@ esp_err_t mjpeg_player_create(const mjpeg_player_config_t *config, mjpeg_player_
 cleanup:
     // Free resources in reverse allocation order (NULL-safe)
     free(player->frame_index);
-    free(player->rgb_buffer);
-    free(player->jpeg_buffer);
-    if (player->owns_decoder) {
-        release_shared_decoder();
+    for (int i = 0; i < 2; i++) {
+        free(player->rgb_buffers[i]);
     }
+    free(player->jpeg_buffer);
     if (player->mutex != NULL) {
         vSemaphoreDelete(player->mutex);
     }
@@ -632,18 +520,15 @@ void mjpeg_player_destroy(mjpeg_player_handle_t handle)
         free(player->frame_index);
     }
 
-    if (player->rgb_buffer != NULL) {
-        free(player->rgb_buffer);
+    // Free both RGB buffers (double buffering)
+    for (int i = 0; i < 2; i++) {
+        if (player->rgb_buffers[i] != NULL) {
+            free(player->rgb_buffers[i]);
+        }
     }
 
     if (player->jpeg_buffer != NULL) {
         free(player->jpeg_buffer);
-    }
-
-    // Release reference to shared decoder (don't delete it)
-    if (player->owns_decoder) {
-        release_shared_decoder();
-        player->owns_decoder = false;
     }
 
     if (player->file != NULL) {

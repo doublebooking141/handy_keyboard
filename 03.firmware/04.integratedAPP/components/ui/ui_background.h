@@ -16,19 +16,6 @@ extern "C" {
 #endif
 
 /**
- * @brief Initialize the shared hardware JPEG decoder
- *
- * This should be called EARLY in system initialization (before display init),
- * when internal DMA memory is still available. The hardware JPEG decoder
- * requires internal DMA-capable memory for its descriptor chains.
- *
- * @return
- *     - ESP_OK: Success
- *     - ESP_ERR_NO_MEM: Not enough internal DMA memory
- */
-esp_err_t ui_bg_init_jpeg_decoder(void);
-
-/**
  * @brief Apply background image to all touchpad panels
  *
  * Sets the same background image on JPKeyboard, AtoZ, and Cursor

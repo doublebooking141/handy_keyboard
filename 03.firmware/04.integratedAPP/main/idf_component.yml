@@ -3,12 +3,12 @@
 
 dependencies:
   # USB HID support
-  espressif/esp_tinyusb: "^1.4.0"
+  espressif/esp_tinyusb: ^1.4.0
 
   # WiFi/BLE support (ESP32-C6 via ESP-Hosted)
   # Note: v2.9.6+ required for SD card coexistence fix
-  espressif/esp_wifi_remote: "*"
-  espressif/esp_hosted: "^2.9.6"
+  espressif/esp_wifi_remote: '*'
+  espressif/esp_hosted: ^2.9.6
 
   # Board Support Package (includes LVGL, Display, Touch, Audio)
   bsp_jc4880p443c:
@@ -16,3 +16,4 @@ dependencies:
 
   # LED strip support (for RGB LEDs if used) - DISABLED until needed
   # espressif/led_strip: "^2.5.0"
+  espressif/usb: '*'

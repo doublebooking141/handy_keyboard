@@ -2,9 +2,11 @@ idf_component_register(
     SRCS
         "src/logger.c"
         "src/event_queue.c"
+        "src/shared_jpeg_decoder.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         freertos
         esp_timer
+        esp_driver_jpeg
 )
