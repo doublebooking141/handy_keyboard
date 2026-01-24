@@ -10,6 +10,7 @@
 #include "ui.h"
 #include "sdcard.h"
 #include "mjpeg_player.h"
+#include "shared_jpeg_decoder.h"
 #include "bsp/jc4880p443c.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -27,69 +28,6 @@ static const char *TAG = "UI_BG";
 
 // Max JPEG file size for hardware decoder (256KB)
 #define MAX_JPEG_FILE_SIZE (256 * 1024)
-
-// ============================================================================
-// Shared JPEG Decoder (Singleton)
-// ============================================================================
-// ESP32-P4 hardware JPEG decoder requires internal DMA memory for rxlink.
-// To avoid running out of internal memory, we share a single decoder instance.
-
-static jpeg_decoder_handle_t s_shared_jpeg_decoder = NULL;
-static SemaphoreHandle_t s_decoder_mutex = NULL;
-
-esp_err_t ui_bg_init_jpeg_decoder(void)
-{
-    if (s_decoder_mutex == NULL) {
-        s_decoder_mutex = xSemaphoreCreateMutex();
-        if (s_decoder_mutex == NULL) {
-            ESP_LOGE(TAG, "Failed to create decoder mutex");
-            return ESP_ERR_NO_MEM;
-        }
-    }
-
-    if (s_shared_jpeg_decoder != NULL) {
-        ESP_LOGD(TAG, "Shared JPEG decoder already initialized");
-        return ESP_OK;
-    }
-
-    // Log available internal DMA memory before allocation
-    size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    ESP_LOGI(TAG, "Free internal DMA memory before JPEG init: %u bytes", free_dma);
-
-    jpeg_decode_engine_cfg_t decode_eng_cfg = {
-        .timeout_ms = 100,
-    };
-    esp_err_t ret = jpeg_new_decoder_engine(&decode_eng_cfg, &s_shared_jpeg_decoder);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create shared JPEG decoder: %s", esp_err_to_name(ret));
-        ESP_LOGE(TAG, "Free internal DMA memory: %u bytes (may need more for rxlink)", free_dma);
-        return ret;
-    }
-
-    ESP_LOGI(TAG, "Hardware JPEG decoder initialized successfully");
-    return ESP_OK;
-}
-
-/**
- * @brief Lock shared decoder for exclusive use during decode operation
- */
-static bool lock_jpeg_decoder(uint32_t timeout_ms)
-{
-    if (s_decoder_mutex == NULL) {
-        return false;
-    }
-    return xSemaphoreTake(s_decoder_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
-}
-
-/**
- * @brief Unlock shared decoder
- */
-static void unlock_jpeg_decoder(void)
-{
-    if (s_decoder_mutex != NULL) {
-        xSemaphoreGive(s_decoder_mutex);
-    }
-}
 
 /**
  * @brief Check if file is a JPEG
@@ -131,8 +69,8 @@ static esp_err_t hw_jpeg_decode_file(const char *file_path, lv_image_dsc_t *imag
     *out_data = NULL;
     memset(image_dsc, 0, sizeof(*image_dsc));
 
-    if (s_shared_jpeg_decoder == NULL) {
-        ESP_LOGE(TAG, "JPEG decoder not initialized - call ui_bg_init_jpeg_decoder() first");
+    if (!shared_jpeg_decoder_is_initialized()) {
+        ESP_LOGE(TAG, "JPEG decoder not initialized - call shared_jpeg_decoder_init() first");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -213,7 +151,7 @@ static esp_err_t hw_jpeg_decode_file(const char *file_path, lv_image_dsc_t *imag
     };
 
     // Lock shared decoder for exclusive access
-    if (!lock_jpeg_decoder(1000)) {
+    if (!shared_jpeg_decoder_lock(1000)) {
         ESP_LOGE(TAG, "Failed to lock shared decoder");
         free(rgb_buffer);
         free(jpeg_buffer);
@@ -222,7 +160,7 @@ static esp_err_t hw_jpeg_decode_file(const char *file_path, lv_image_dsc_t *imag
 
     uint32_t out_size = 0;
     ret = jpeg_decoder_process(
-        s_shared_jpeg_decoder,
+        shared_jpeg_decoder_get_handle(),
         &decode_cfg,
         jpeg_buffer,
         file_size,
@@ -231,7 +169,7 @@ static esp_err_t hw_jpeg_decode_file(const char *file_path, lv_image_dsc_t *imag
         &out_size
     );
 
-    unlock_jpeg_decoder();
+    shared_jpeg_decoder_unlock();
 
     // Free input buffer
     free(jpeg_buffer);

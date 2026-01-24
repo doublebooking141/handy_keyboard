@@ -43,6 +43,7 @@
 // SD Card and Background management
 #include "sdcard.h"
 #include "ui_background.h"
+#include "shared_jpeg_decoder.h"
 
 // Alarm
 #include "alarm.h"
@@ -185,12 +186,12 @@ void app_main(void)
     ESP_LOGI(TAG, "ESP32-P4 initialized");
     ESP_LOGI(TAG, "Free heap: %lu bytes", esp_get_free_heap_size());
 
-    // Initialize hardware JPEG decoder early (requires internal DMA memory)
+    // Initialize shared hardware JPEG decoder early (requires internal DMA memory)
     // Must be done before display init consumes internal memory
-    ESP_LOGI(TAG, "Initializing hardware JPEG decoder...");
-    esp_err_t jpeg_ret = ui_bg_init_jpeg_decoder();
+    ESP_LOGI(TAG, "Initializing shared hardware JPEG decoder...");
+    esp_err_t jpeg_ret = shared_jpeg_decoder_init();
     if (jpeg_ret != ESP_OK) {
-        ESP_LOGW(TAG, "Hardware JPEG decoder init failed: %s (will use software decoder)",
+        ESP_LOGW(TAG, "Shared JPEG decoder init failed: %s (will use software decoder)",
                  esp_err_to_name(jpeg_ret));
     }
 

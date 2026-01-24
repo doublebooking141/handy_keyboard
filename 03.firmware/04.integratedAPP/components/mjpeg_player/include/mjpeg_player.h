@@ -53,18 +53,6 @@ typedef enum {
 } mjpeg_player_state_t;
 
 /**
- * @brief Initialize the shared JPEG decoder at startup
- *
- * This should be called EARLY in system initialization (before display init),
- * when internal DMA memory is still available.
- *
- * @return
- *     - ESP_OK: Success
- *     - ESP_ERR_NO_MEM: Not enough internal DMA memory
- */
-esp_err_t mjpeg_player_init_shared_decoder(void);
-
-/**
  * @brief Create MJPEG player instance
  *
  * @param config Player configuration
