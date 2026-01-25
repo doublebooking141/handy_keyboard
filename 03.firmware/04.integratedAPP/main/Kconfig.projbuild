@@ -1,0 +1,40 @@
+menu "Handy Keyboard Network"
+
+    config HANDY_WOL_DEFAULT_MAC
+        string "Wake-on-LAN target MAC address"
+        default "AA:BB:CC:DD:EE:FF"
+        help
+            Default target MAC address for Wake-on-LAN packets.
+            Format: "AA:BB:CC:DD:EE:FF" or "AA-BB-CC-DD-EE-FF"
+
+    config HANDY_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help
+            Default WiFi network SSID to connect to.
+            Leave empty to require manual configuration.
+
+    config HANDY_WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+        help
+            Default WiFi network password.
+            Leave empty for open networks.
+
+    config HANDY_NTP_DEFAULT_SERVER
+        int "Default NTP server (0=NICT, 1=Google)"
+        default 0
+        range 0 1
+        help
+            Default NTP server for time synchronization.
+            0 = NICT Japan (ntp.nict.jp)
+            1 = Google (time.google.com)
+
+    config HANDY_NETWORK_AUTO_CONNECT
+        bool "Auto-connect WiFi on startup"
+        default y
+        help
+            If enabled and SSID is configured, automatically
+            connect to WiFi during startup.
+
+endmenu

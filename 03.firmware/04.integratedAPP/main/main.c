@@ -48,6 +48,11 @@
 // Alarm
 #include "alarm.h"
 
+// Network
+#include "network.h"
+#include "ntp.h"
+#include "wol.h"
+
 static const char *TAG = "HANDY_KEYBOARD";
 
 // LVGL display handle
@@ -224,6 +229,41 @@ void app_main(void)
 
     // Initialize RTC using BSP I2C handle
     rtc_init();
+
+    // Initialize network subsystem (WiFi via ESP-Hosted)
+    ESP_LOGI(TAG, "Initializing network subsystem...");
+    esp_err_t net_ret = network_init();
+    if (net_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Network init failed: %s", esp_err_to_name(net_ret));
+    } else {
+        ESP_LOGI(TAG, "Network subsystem initialized");
+
+        // Auto-connect if configured
+#if defined(CONFIG_HANDY_NETWORK_AUTO_CONNECT) && defined(CONFIG_HANDY_WIFI_SSID)
+        if (strlen(CONFIG_HANDY_WIFI_SSID) > 0) {
+            ESP_LOGI(TAG, "Auto-connecting to WiFi: %s", CONFIG_HANDY_WIFI_SSID);
+            network_connect(CONFIG_HANDY_WIFI_SSID, CONFIG_HANDY_WIFI_PASSWORD);
+        }
+#endif
+    }
+
+    // Initialize NTP subsystem (with RTC handle for time writeback)
+    ESP_LOGI(TAG, "Initializing NTP subsystem...");
+    esp_err_t ntp_ret = ntp_init(g_rtc_initialized ? &g_rtc_handle : NULL);
+    if (ntp_ret != ESP_OK) {
+        ESP_LOGW(TAG, "NTP init failed: %s", esp_err_to_name(ntp_ret));
+    } else {
+        ESP_LOGI(TAG, "NTP subsystem initialized");
+    }
+
+    // Initialize WOL subsystem
+    ESP_LOGI(TAG, "Initializing WOL subsystem...");
+    esp_err_t wol_ret = wol_init();
+    if (wol_ret != ESP_OK) {
+        ESP_LOGW(TAG, "WOL init failed: %s", esp_err_to_name(wol_ret));
+    } else {
+        ESP_LOGI(TAG, "WOL subsystem initialized");
+    }
 
     // Initialize alarm system (uses audio player and NVS)
     ESP_LOGI(TAG, "Initializing alarm system...");

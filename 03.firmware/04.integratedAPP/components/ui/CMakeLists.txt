@@ -9,6 +9,6 @@ file(GLOB_RECURSE UI_SOURCES
 idf_component_register(
     SRCS ${UI_SOURCES}
     INCLUDE_DIRS "." "screens" "fonts" "images" "components"
-    REQUIRES lvgl ble_hid sdcard esp_driver_jpeg mjpeg_player alarm common
+    REQUIRES lvgl ble_hid sdcard esp_driver_jpeg mjpeg_player alarm common network
     PRIV_REQUIRES bsp_jc4880p443c
 )
