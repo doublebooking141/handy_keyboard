@@ -38,6 +38,9 @@
 #include "sdcard.h"
 #include "ui_background.h"
 
+// Network settings
+#include "ui_network.h"
+
 static const char *TAG = "UI_NAV";
 
 // ============================================================================
@@ -223,6 +226,7 @@ static volatile uint8_t g_alarm_triggered_index = 0xFF;
 static lv_obj_t *bg_touchpad_dropdown = NULL;
 static lv_obj_t *bg_clock_dropdown = NULL;
 static bool bg_ui_created = false;
+static bool network_ui_created = false;
 
 // Background file list storage
 #define MAX_BG_FILES 32
@@ -1500,6 +1504,7 @@ static void setup_settings_nav(void)
         bg_touchpad_dropdown = NULL;
         bg_clock_dropdown = NULL;
         bg_ui_created = false;
+        network_ui_created = false;
     }
 
     if (ui_SettingScreen && !setting_back_btn) {
@@ -1632,6 +1637,22 @@ static void setup_settings_nav(void)
         bg_ui_created = true;
     }
 
+    // Create Network settings UI (below Background settings)
+    if (ui_Panel43 && !network_ui_created) {
+        // Add separator
+        lv_obj_t *separator3 = lv_obj_create(ui_Panel43);
+        lv_obj_set_size(separator3, 200, 2);
+        lv_obj_set_style_bg_color(separator3, lv_color_hex(0x444444), 0);
+        lv_obj_set_style_border_width(separator3, 0, 0);
+        lv_obj_set_style_pad_all(separator3, 0, 0);
+
+        // Initialize network settings UI
+        ui_network_init(ui_Panel43);
+        network_ui_created = true;
+
+        ESP_LOGI(TAG, "Network settings UI created");
+    }
+
     last_settings_screen = ui_SettingScreen;
     ESP_LOGD(TAG, "Settings nav ready");
 }
@@ -1682,6 +1703,11 @@ static void nav_timer_cb(lv_timer_t *timer)
     // Check for alarm trigger and show popup (thread-safe via LVGL timer)
     if (g_alarm_triggered && !ui_alarm_is_popup_visible()) {
         ui_alarm_show_trigger_popup(g_alarm_triggered_index);
+    }
+
+    // Update network status UI (WiFi connection state)
+    if (network_ui_created) {
+        ui_network_update();
     }
 }
 

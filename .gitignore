@@ -9,6 +9,7 @@
 **/build/
 **/sdkconfig
 **/sdkconfig.old
+**/sdkconfig.local
 
 # Claude Code session data
 .claude/logs/

@@ -231,3 +231,19 @@ CONFIG_FATFS_MAX_LFN=255
 # I2C configuration (GPIO7=SDA, GPIO8=SCL)
 # Devices: DS3231M RTC (0x68), ES8311 Audio Codec (0x18), GT911 Touch (0x5D)
 CONFIG_I2C_ENABLE_DEBUG_LOG=n
+
+# =============================================================================
+# 15. Network Settings (WiFi, NTP, WOL)
+# =============================================================================
+
+# WiFi credentials (2.4GHz only via ESP32-C6)
+# Set via menuconfig or sdkconfig.local (not committed to git)
+# CONFIG_HANDY_WIFI_SSID=""
+# CONFIG_HANDY_WIFI_PASSWORD=""
+CONFIG_HANDY_NETWORK_AUTO_CONNECT=y
+
+# NTP server (0=NICT Japan, 1=Google)
+CONFIG_HANDY_NTP_DEFAULT_SERVER=0
+
+# Wake-on-LAN default target MAC
+CONFIG_HANDY_WOL_DEFAULT_MAC="AA:BB:CC:DD:EE:FF"
