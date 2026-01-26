@@ -13,9 +13,15 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/timers.h"
 #include <string.h>
 
 static const char *TAG = "NETWORK";
+
+// Exponential backoff configuration
+#define INITIAL_BACKOFF_MS     1000   // 1 second
+#define MAX_BACKOFF_MS         60000  // 60 seconds
+#define BACKOFF_MULTIPLIER     2
 
 // NVS namespace and keys
 #define NVS_NAMESPACE "network"
@@ -36,9 +42,84 @@ static network_event_cb_t g_event_callback = NULL;
 static int g_retry_count = 0;
 static const int MAX_RETRY = 5;
 
+// Exponential backoff reconnection
+static TimerHandle_t g_reconnect_timer = NULL;
+static uint32_t g_backoff_ms = INITIAL_BACKOFF_MS;
+
 // Current connection info
 static char g_current_ssid[33] = {0};
 static esp_netif_ip_info_t g_ip_info;
+
+// WiFi scan state
+static network_scan_cb_t g_scan_callback = NULL;
+static bool g_scanning = false;
+
+// Coprocessor status
+static bool g_coprocessor_available = false;
+
+/**
+ * @brief Handle scan complete event
+ */
+static void handle_scan_done(void)
+{
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+
+    ESP_LOGI(TAG, "Scan complete, found %d networks", ap_count);
+
+    if (ap_count > MAX_SCAN_RESULTS) {
+        ap_count = MAX_SCAN_RESULTS;
+    }
+
+    network_scan_result_t results[MAX_SCAN_RESULTS];
+    memset(results, 0, sizeof(results));
+
+    if (ap_count > 0) {
+        wifi_ap_record_t *ap_list = malloc(sizeof(wifi_ap_record_t) * ap_count);
+        if (ap_list) {
+            uint16_t max_records = ap_count;
+            esp_err_t ret = esp_wifi_scan_get_ap_records(&max_records, ap_list);
+            if (ret == ESP_OK) {
+                for (int i = 0; i < max_records; i++) {
+                    strncpy(results[i].ssid, (char *)ap_list[i].ssid, 32);
+                    results[i].ssid[32] = '\0';
+                    results[i].rssi = ap_list[i].rssi;
+                    results[i].authmode = ap_list[i].authmode;
+                }
+                ap_count = max_records;
+            } else {
+                ESP_LOGE(TAG, "Failed to get scan records: %s", esp_err_to_name(ret));
+                ap_count = 0;
+            }
+            free(ap_list);
+        } else {
+            ESP_LOGE(TAG, "Failed to allocate memory for scan results");
+            ap_count = 0;
+        }
+    }
+
+    g_scanning = false;
+
+    if (g_scan_callback) {
+        g_scan_callback(results, ap_count);
+    }
+}
+
+/**
+ * @brief Reconnect timer callback for exponential backoff
+ */
+static void reconnect_timer_cb(TimerHandle_t xTimer)
+{
+    (void)xTimer;
+
+    if (g_connect_requested && g_retry_count < MAX_RETRY) {
+        ESP_LOGI(TAG, "Attempting reconnection...");
+        esp_err_t ret = esp_wifi_connect();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initiate reconnection: %s", esp_err_to_name(ret));
+        }
+    }
+}
 
 /**
  * @brief WiFi event handler
@@ -57,14 +138,40 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         // Only retry if connection was explicitly requested
         if (g_connect_requested && g_retry_count < MAX_RETRY) {
             g_retry_count++;
-            ESP_LOGI(TAG, "Retrying connection (%d/%d)...", g_retry_count, MAX_RETRY);
-            esp_wifi_connect();
+
+            // Calculate backoff delay
+            uint32_t backoff = g_backoff_ms;
+            ESP_LOGI(TAG, "Reconnecting in %lu ms (attempt %d/%d)",
+                     (unsigned long)backoff, g_retry_count, MAX_RETRY);
+
+            // Update backoff for next attempt (exponential)
+            g_backoff_ms = g_backoff_ms * BACKOFF_MULTIPLIER;
+            if (g_backoff_ms > MAX_BACKOFF_MS) {
+                g_backoff_ms = MAX_BACKOFF_MS;
+            }
+
+            // Schedule delayed reconnection
+            if (!g_reconnect_timer) {
+                g_reconnect_timer = xTimerCreate("wifi_reconnect",
+                                                  pdMS_TO_TICKS(backoff),
+                                                  pdFALSE,  // One-shot timer
+                                                  NULL,
+                                                  reconnect_timer_cb);
+            } else {
+                xTimerChangePeriod(g_reconnect_timer, pdMS_TO_TICKS(backoff), 0);
+            }
+
+            if (g_reconnect_timer) {
+                xTimerStart(g_reconnect_timer, 0);
+            }
+
             g_state = NETWORK_STATE_CONNECTING;
         } else if (g_connect_requested) {
             ESP_LOGE(TAG, "Connection failed after %d retries", MAX_RETRY);
             xEventGroupSetBits(g_wifi_event_group, WIFI_FAIL_BIT);
             g_state = NETWORK_STATE_ERROR;
             g_connect_requested = false;
+            g_backoff_ms = INITIAL_BACKOFF_MS;  // Reset for next connection attempt
         } else {
             g_state = NETWORK_STATE_DISCONNECTED;
         }
@@ -76,7 +183,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         wifi_event_sta_connected_t *event = (wifi_event_sta_connected_t *)event_data;
         ESP_LOGI(TAG, "Connected to AP: %s", event->ssid);
         g_retry_count = 0;
+        g_backoff_ms = INITIAL_BACKOFF_MS;  // Reset backoff on successful connection
         // Wait for IP before setting CONNECTED state
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_SCAN_DONE) {
+        handle_scan_done();
     }
 }
 
@@ -111,14 +221,23 @@ esp_err_t network_init(void)
 
     ESP_LOGI(TAG, "Initializing network subsystem...");
 
-    // Verify ESP-Hosted coprocessor is connected
-    // (BLE HID init should have already established this connection)
-    esp_hosted_coprocessor_fwver_t fwver;
-    if (esp_hosted_get_coprocessor_fwversion(&fwver) == ESP_OK) {
-        ESP_LOGI(TAG, "ESP-Hosted coprocessor FW: %lu.%lu.%lu",
-                 fwver.major1, fwver.minor1, fwver.patch1);
-    } else {
-        ESP_LOGW(TAG, "Could not get ESP-Hosted coprocessor version - WiFi may not work");
+    // Verify ESP-Hosted coprocessor is connected with retries
+    g_coprocessor_available = false;
+    for (int retry = 0; retry < 3; retry++) {
+        esp_hosted_coprocessor_fwver_t fwver;
+        if (esp_hosted_get_coprocessor_fwversion(&fwver) == ESP_OK) {
+            g_coprocessor_available = true;
+            ESP_LOGI(TAG, "ESP-Hosted coprocessor FW: %lu.%lu.%lu",
+                     fwver.major1, fwver.minor1, fwver.patch1);
+            break;
+        }
+        ESP_LOGW(TAG, "Coprocessor check failed, retry %d/3", retry + 1);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
+    if (!g_coprocessor_available) {
+        ESP_LOGE(TAG, "ESP-Hosted coprocessor not available - WiFi disabled");
+        return ESP_ERR_NOT_FOUND;
     }
 
     // Create event group
@@ -195,6 +314,13 @@ esp_err_t network_deinit(void)
         return ESP_OK;
     }
 
+    // Stop and delete reconnect timer
+    if (g_reconnect_timer) {
+        xTimerStop(g_reconnect_timer, 0);
+        xTimerDelete(g_reconnect_timer, 0);
+        g_reconnect_timer = NULL;
+    }
+
     esp_wifi_stop();
     esp_wifi_deinit();
 
@@ -210,6 +336,7 @@ esp_err_t network_deinit(void)
 
     g_initialized = false;
     g_state = NETWORK_STATE_DISCONNECTED;
+    g_backoff_ms = INITIAL_BACKOFF_MS;
     ESP_LOGI(TAG, "Network subsystem deinitialized");
 
     return ESP_OK;
@@ -229,6 +356,14 @@ esp_err_t network_connect(const char *ssid, const char *password)
 
     ESP_LOGI(TAG, "Connecting to WiFi: %s", ssid);
 
+    // Disconnect if already connected or connecting
+    if (g_state == NETWORK_STATE_CONNECTED || g_state == NETWORK_STATE_CONNECTING) {
+        ESP_LOGI(TAG, "Disconnecting from current network first");
+        g_connect_requested = false;  // Prevent auto-reconnect during transition
+        esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(100));  // Brief delay for disconnect to complete
+    }
+
     // Store SSID for reference
     strncpy(g_current_ssid, ssid, sizeof(g_current_ssid) - 1);
     g_current_ssid[sizeof(g_current_ssid) - 1] = '\0';
@@ -245,10 +380,16 @@ esp_err_t network_connect(const char *ssid, const char *password)
 
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
 
-    // Reset retry counter and mark connection as requested
+    // Reset retry counter, backoff and mark connection as requested
     g_retry_count = 0;
+    g_backoff_ms = INITIAL_BACKOFF_MS;
     g_connect_requested = true;
     g_state = NETWORK_STATE_CONNECTING;
+
+    // Stop any pending reconnect timer
+    if (g_reconnect_timer) {
+        xTimerStop(g_reconnect_timer, 0);
+    }
 
     // Clear event bits
     xEventGroupClearBits(g_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
@@ -414,4 +555,67 @@ bool network_has_saved_credentials(void)
 void network_register_callback(network_event_cb_t cb)
 {
     g_event_callback = cb;
+}
+
+esp_err_t network_scan_start(network_scan_cb_t callback)
+{
+    if (!g_initialized) {
+        ESP_LOGE(TAG, "Network not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (g_scanning) {
+        ESP_LOGW(TAG, "Scan already in progress");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    g_scan_callback = callback;
+    g_scanning = true;
+
+    wifi_scan_config_t scan_config = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = false,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_time = {
+            .active = {
+                .min = 100,
+                .max = 300,
+            },
+        },
+    };
+
+    ESP_LOGI(TAG, "Starting WiFi scan...");
+    esp_err_t ret = esp_wifi_scan_start(&scan_config, false);  // Non-blocking
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start scan: %s", esp_err_to_name(ret));
+        g_scanning = false;
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+bool network_is_scanning(void)
+{
+    return g_scanning;
+}
+
+bool network_is_coprocessor_available(void)
+{
+    return g_coprocessor_available;
+}
+
+esp_err_t network_reset_coprocessor(void)
+{
+    ESP_LOGI(TAG, "Resetting coprocessor connection...");
+
+    // Deinitialize if already initialized
+    if (g_initialized) {
+        network_deinit();
+    }
+
+    // Re-initialize
+    return network_init();
 }
