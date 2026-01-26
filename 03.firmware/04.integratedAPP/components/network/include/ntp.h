@@ -116,6 +116,23 @@ const char *ntp_get_server_name(ntp_server_t server);
  */
 void ntp_register_callback(ntp_sync_cb_t cb);
 
+/**
+ * @brief Set NTP sync timeout
+ *
+ * If sync doesn't complete within timeout, status changes to NTP_STATUS_FAILED.
+ *
+ * @param[in] timeout_ms Timeout in milliseconds (1000-300000, default 30000)
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if out of range
+ */
+esp_err_t ntp_set_timeout(uint32_t timeout_ms);
+
+/**
+ * @brief Get current NTP sync timeout
+ *
+ * @return Timeout in milliseconds
+ */
+uint32_t ntp_get_timeout(void);
+
 #ifdef __cplusplus
 }
 #endif

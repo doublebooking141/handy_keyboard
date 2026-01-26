@@ -11,10 +11,14 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/timers.h"
 #include <string.h>
 #include <sys/time.h>
 
 static const char *TAG = "NTP";
+
+// Default NTP sync timeout (30 seconds)
+#define DEFAULT_NTP_TIMEOUT_MS 30000
 
 // NVS namespace and keys
 #define NVS_NAMESPACE "network"
@@ -39,11 +43,40 @@ static ds3231m_handle_t *g_rtc_handle = NULL;
 static ntp_sync_cb_t g_sync_callback = NULL;
 static ntp_server_t g_current_server = NTP_SERVER_NICT;
 
+// Timeout timer
+static TimerHandle_t g_timeout_timer = NULL;
+static uint32_t g_timeout_ms = DEFAULT_NTP_TIMEOUT_MS;
+
+/**
+ * @brief NTP sync timeout callback
+ */
+static void ntp_timeout_cb(TimerHandle_t xTimer)
+{
+    (void)xTimer;
+    ESP_LOGE(TAG, "NTP sync timeout after %lu ms", (unsigned long)g_timeout_ms);
+
+    // Stop SNTP operation
+    if (esp_sntp_enabled()) {
+        esp_sntp_stop();
+    }
+
+    g_status = NTP_STATUS_FAILED;
+
+    if (g_sync_callback) {
+        g_sync_callback(g_status);
+    }
+}
+
 /**
  * @brief SNTP time sync notification callback
  */
 static void ntp_sync_notification_cb(struct timeval *tv)
 {
+    // Stop timeout timer on successful sync
+    if (g_timeout_timer) {
+        xTimerStop(g_timeout_timer, 0);
+    }
+
     ESP_LOGI(TAG, "NTP sync completed");
 
     // Get synced time
@@ -112,6 +145,13 @@ esp_err_t ntp_deinit(void)
         return ESP_OK;
     }
 
+    // Stop and delete timeout timer
+    if (g_timeout_timer) {
+        xTimerStop(g_timeout_timer, 0);
+        xTimerDelete(g_timeout_timer, 0);
+        g_timeout_timer = NULL;
+    }
+
     esp_sntp_stop();
     g_initialized = false;
     g_status = NTP_STATUS_IDLE;
@@ -160,6 +200,26 @@ esp_err_t ntp_sync(ntp_server_t server)
     // Start SNTP (non-blocking)
     // Sync completion will be notified via ntp_sync_notification_cb
     esp_sntp_init();
+
+    // Start timeout timer
+    if (!g_timeout_timer) {
+        g_timeout_timer = xTimerCreate("ntp_timeout",
+                                        pdMS_TO_TICKS(g_timeout_ms),
+                                        pdFALSE,  // One-shot timer
+                                        NULL,
+                                        ntp_timeout_cb);
+        if (!g_timeout_timer) {
+            ESP_LOGE(TAG, "Failed to create NTP timeout timer");
+        }
+    } else {
+        // Update period if timeout was changed
+        xTimerChangePeriod(g_timeout_timer, pdMS_TO_TICKS(g_timeout_ms), 0);
+    }
+
+    if (g_timeout_timer) {
+        xTimerStart(g_timeout_timer, 0);
+        ESP_LOGI(TAG, "NTP timeout timer started (%lu ms)", (unsigned long)g_timeout_ms);
+    }
 
     ESP_LOGI(TAG, "NTP sync started (async)");
     return ESP_OK;
@@ -251,4 +311,21 @@ const char *ntp_get_server_name(ntp_server_t server)
 void ntp_register_callback(ntp_sync_cb_t cb)
 {
     g_sync_callback = cb;
+}
+
+esp_err_t ntp_set_timeout(uint32_t timeout_ms)
+{
+    if (timeout_ms < 1000 || timeout_ms > 300000) {
+        ESP_LOGE(TAG, "Invalid timeout: %lu ms (valid range: 1000-300000)", (unsigned long)timeout_ms);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    g_timeout_ms = timeout_ms;
+    ESP_LOGI(TAG, "NTP timeout set to %lu ms", (unsigned long)timeout_ms);
+    return ESP_OK;
+}
+
+uint32_t ntp_get_timeout(void)
+{
+    return g_timeout_ms;
 }
