@@ -1372,6 +1372,9 @@ static uint32_t find_bg_index(const char *current_path)
 
 /**
  * @brief Touchpad background dropdown callback
+ *
+ * Uses deferred loading - only saves path here, actual loading happens
+ * when navigating to a keyboard screen via ui_bg_check_and_load().
  */
 static void bg_touchpad_changed_cb(lv_event_t *e)
 {
@@ -1380,20 +1383,25 @@ static void bg_touchpad_changed_cb(lv_event_t *e)
     uint32_t idx = lv_dropdown_get_selected(bg_touchpad_dropdown);
 
     if (idx == 0) {
-        // None selected
+        // None selected - save and clear immediately
         sdcard_set_touchpad_bg(SDCARD_BG_NONE);
+        ui_bg_set_touchpad_path(NULL);
         ui_bg_clear_touchpad();
         ESP_LOGI(TAG, "Touchpad background cleared");
     } else if (idx <= s_bg_file_count) {
+        // Save path for deferred loading
         const char *path = s_bg_files[idx - 1].full_path;
         sdcard_set_touchpad_bg(path);
-        ui_bg_apply_to_touchpad(path);
-        ESP_LOGI(TAG, "Touchpad background set: %s", path);
+        ui_bg_set_touchpad_path(path);
+        ESP_LOGI(TAG, "Touchpad background queued: %s", path);
     }
 }
 
 /**
  * @brief Clock background dropdown callback
+ *
+ * Uses deferred loading - only saves path here, actual loading happens
+ * when navigating to clock screen via ui_bg_check_and_load().
  */
 static void bg_clock_changed_cb(lv_event_t *e)
 {
@@ -1402,15 +1410,17 @@ static void bg_clock_changed_cb(lv_event_t *e)
     uint32_t idx = lv_dropdown_get_selected(bg_clock_dropdown);
 
     if (idx == 0) {
-        // Default selected
+        // Default selected - save and clear immediately
         sdcard_set_clock_bg(SDCARD_BG_NONE);
+        ui_bg_set_clock_path(NULL);
         ui_bg_clear_clock();
         ESP_LOGI(TAG, "Clock background set to default");
     } else if (idx <= s_bg_file_count) {
+        // Save path for deferred loading
         const char *path = s_bg_files[idx - 1].full_path;
         sdcard_set_clock_bg(path);
-        ui_bg_apply_to_clock(path);
-        ESP_LOGI(TAG, "Clock background set: %s", path);
+        ui_bg_set_clock_path(path);
+        ESP_LOGI(TAG, "Clock background queued: %s", path);
     }
 }
 
@@ -1709,6 +1719,14 @@ static void nav_timer_cb(lv_timer_t *timer)
     if (network_ui_created) {
         ui_network_update();
     }
+
+    // Check for pending background loads and start loading if needed
+    // This implements deferred loading - backgrounds are loaded when
+    // user navigates to the relevant screen, not when selected in settings
+    ui_bg_check_and_load();
+
+    // Refresh backgrounds if screen objects were recreated
+    ui_bg_refresh_if_needed();
 }
 
 // ============================================================================
