@@ -316,7 +316,8 @@ static void mjpeg_playback_task(void *arg)
     TickType_t frame_delay = pdMS_TO_TICKS(1000 / player->fps);
     TickType_t last_wake_time = xTaskGetTickCount();
 
-    ESP_LOGD(TAG, "Playback task started (delay=%lu ms)", (unsigned long)(1000 / player->fps));
+    ESP_LOGI(TAG, "Playback task started (delay=%lu ms, fps=%d)",
+             (unsigned long)(1000 / player->fps), player->fps);
 
     while (player->task_running) {
         if (player->state == MJPEG_STATE_PLAYING) {
@@ -398,7 +399,7 @@ esp_err_t mjpeg_player_create(const mjpeg_player_config_t *config, mjpeg_player_
     player->target_image = config->target_image;
     player->target_width = config->target_width > 0 ? config->target_width : 480;
     player->target_height = config->target_height > 0 ? config->target_height : 800;
-    player->fps = (config->fps > 0 && config->fps <= 60) ? config->fps : 24;
+    player->fps = (config->fps > 0 && config->fps <= 60) ? config->fps : 40;
     player->loop = config->loop;
     player->state = MJPEG_STATE_IDLE;
     player->cancel_check = config->cancel_check;
