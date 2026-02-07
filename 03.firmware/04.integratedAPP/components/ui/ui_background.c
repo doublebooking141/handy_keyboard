@@ -17,11 +17,16 @@
 #include "driver/jpeg_decode.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include <string.h>
 #include <stdio.h>
 #include <strings.h>
 
 static const char *TAG = "UI_BG";
+
+// Loading task configuration
+#define BG_LOAD_TASK_STACK_SIZE  8192
+#define BG_LOAD_TASK_PRIORITY    5
 
 // LVGL filesystem drive letter for POSIX (CONFIG_LV_FS_POSIX_LETTER=83='S')
 #define LVGL_FS_PREFIX "S:"
@@ -256,6 +261,20 @@ static mjpeg_player_handle_t s_clock_mjpeg_player = NULL;
 // LVGL image widgets for MJPEG playback
 static lv_obj_t *s_touchpad_mjpeg_image = NULL;
 static lv_obj_t *s_clock_mjpeg_image = NULL;
+
+// Deferred loading state
+static ui_bg_state_t s_touchpad_state = UI_BG_STATE_NONE;
+static ui_bg_state_t s_clock_state = UI_BG_STATE_NONE;
+static char s_touchpad_pending_path[128] = {0};
+static char s_clock_pending_path[128] = {0};
+
+// Loading task handles
+static TaskHandle_t s_touchpad_load_task = NULL;
+static TaskHandle_t s_clock_load_task = NULL;
+
+// Spinner widgets for loading indication
+static lv_obj_t *s_touchpad_spinner = NULL;
+static lv_obj_t *s_clock_spinner = NULL;
 
 /**
  * @brief Stop and destroy MJPEG player for touchpad
@@ -601,20 +620,217 @@ void ui_bg_load_saved_settings(void)
 {
     char path[128];
 
-    ESP_LOGI(TAG, "Loading saved background settings...");
+    ESP_LOGI(TAG, "Loading saved background settings (deferred)...");
 
-    // Load touchpad background
+    // Load touchpad background path (deferred loading)
     if (sdcard_get_touchpad_bg(path, sizeof(path)) == ESP_OK && path[0] != '\0') {
-        ESP_LOGI(TAG, "Restoring touchpad background: %s", path);
-        ui_bg_apply_to_touchpad(path);
+        ESP_LOGI(TAG, "Queued touchpad background: %s", path);
+        ui_bg_set_touchpad_path(path);
     }
 
-    // Load clock background
+    // Load clock background path (deferred loading)
     if (sdcard_get_clock_bg(path, sizeof(path)) == ESP_OK && path[0] != '\0') {
-        ESP_LOGI(TAG, "Restoring clock background: %s", path);
-        ui_bg_apply_to_clock(path);
+        ESP_LOGI(TAG, "Queued clock background: %s", path);
+        ui_bg_set_clock_path(path);
     }
 }
+
+// ============================================================================
+// Deferred Loading API
+// ============================================================================
+
+void ui_bg_set_touchpad_path(const char *path)
+{
+    if (path && path[0] != '\0') {
+        strncpy(s_touchpad_pending_path, path, sizeof(s_touchpad_pending_path) - 1);
+        s_touchpad_pending_path[sizeof(s_touchpad_pending_path) - 1] = '\0';
+        s_touchpad_state = UI_BG_STATE_PENDING;
+        ESP_LOGI(TAG, "Touchpad background path set (deferred): %s", path);
+    } else {
+        s_touchpad_pending_path[0] = '\0';
+        s_touchpad_state = UI_BG_STATE_NONE;
+        ESP_LOGI(TAG, "Touchpad background cleared");
+    }
+}
+
+void ui_bg_set_clock_path(const char *path)
+{
+    if (path && path[0] != '\0') {
+        strncpy(s_clock_pending_path, path, sizeof(s_clock_pending_path) - 1);
+        s_clock_pending_path[sizeof(s_clock_pending_path) - 1] = '\0';
+        s_clock_state = UI_BG_STATE_PENDING;
+        ESP_LOGI(TAG, "Clock background path set (deferred): %s", path);
+    } else {
+        s_clock_pending_path[0] = '\0';
+        s_clock_state = UI_BG_STATE_NONE;
+        ESP_LOGI(TAG, "Clock background cleared");
+    }
+}
+
+ui_bg_state_t ui_bg_get_touchpad_state(void)
+{
+    return s_touchpad_state;
+}
+
+ui_bg_state_t ui_bg_get_clock_state(void)
+{
+    return s_clock_state;
+}
+
+/**
+ * @brief Create spinner overlay on parent object
+ */
+static lv_obj_t *create_spinner_overlay(lv_obj_t *parent)
+{
+    if (!parent) return NULL;
+
+    // Create container for spinner
+    lv_obj_t *container = lv_obj_create(parent);
+    lv_obj_set_size(container, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(container, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(container, LV_OPA_50, LV_PART_MAIN);
+    lv_obj_set_style_border_width(container, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_center(container);
+
+    // Create spinner
+    lv_obj_t *spinner = lv_spinner_create(container);
+    lv_obj_set_size(spinner, 60, 60);
+    lv_obj_center(spinner);
+    lv_spinner_set_anim_params(spinner, 1000, 200);
+
+    return container;
+}
+
+/**
+ * @brief Remove spinner overlay
+ */
+static void remove_spinner(lv_obj_t **spinner_ptr)
+{
+    if (spinner_ptr && *spinner_ptr) {
+        lv_obj_delete(*spinner_ptr);
+        *spinner_ptr = NULL;
+    }
+}
+
+/**
+ * @brief Background loading task for touchpad
+ */
+static void touchpad_load_task(void *arg)
+{
+    ESP_LOGI(TAG, "Touchpad background loading started");
+
+    // Copy path locally (s_touchpad_pending_path may change)
+    char path[128];
+    strncpy(path, s_touchpad_pending_path, sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+
+    // Perform the actual loading (blocks until complete)
+    esp_err_t ret = ui_bg_apply_to_touchpad(path);
+
+    // Update state and remove spinner
+    if (bsp_display_lock(100)) {
+        remove_spinner(&s_touchpad_spinner);
+        s_touchpad_state = (ret == ESP_OK) ? UI_BG_STATE_READY : UI_BG_STATE_NONE;
+        bsp_display_unlock();
+    } else {
+        s_touchpad_state = (ret == ESP_OK) ? UI_BG_STATE_READY : UI_BG_STATE_NONE;
+    }
+
+    ESP_LOGI(TAG, "Touchpad background loading complete: %s",
+             ret == ESP_OK ? "success" : esp_err_to_name(ret));
+
+    s_touchpad_load_task = NULL;
+    vTaskDelete(NULL);
+}
+
+/**
+ * @brief Background loading task for clock
+ */
+static void clock_load_task(void *arg)
+{
+    ESP_LOGI(TAG, "Clock background loading started");
+
+    // Copy path locally (s_clock_pending_path may change)
+    char path[128];
+    strncpy(path, s_clock_pending_path, sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+
+    // Perform the actual loading (blocks until complete)
+    esp_err_t ret = ui_bg_apply_to_clock(path);
+
+    // Update state and remove spinner
+    if (bsp_display_lock(100)) {
+        remove_spinner(&s_clock_spinner);
+        s_clock_state = (ret == ESP_OK) ? UI_BG_STATE_READY : UI_BG_STATE_NONE;
+        bsp_display_unlock();
+    } else {
+        s_clock_state = (ret == ESP_OK) ? UI_BG_STATE_READY : UI_BG_STATE_NONE;
+    }
+
+    ESP_LOGI(TAG, "Clock background loading complete: %s",
+             ret == ESP_OK ? "success" : esp_err_to_name(ret));
+
+    s_clock_load_task = NULL;
+    vTaskDelete(NULL);
+}
+
+void ui_bg_check_and_load(void)
+{
+    // Check touchpad background
+    if (s_touchpad_state == UI_BG_STATE_PENDING && s_touchpad_load_task == NULL) {
+        s_touchpad_state = UI_BG_STATE_LOADING;
+
+        // Show spinner on first available touchpad panel
+        if (bsp_display_lock(100)) {
+            lv_obj_t *target = ui_TouchAndScrollPanel;
+            if (!target) target = ui_TouchAndScrollPanel1;
+            if (!target) target = ui_TouchAndScrollPanel2;
+
+            if (target && !s_touchpad_spinner) {
+                s_touchpad_spinner = create_spinner_overlay(target);
+            }
+            bsp_display_unlock();
+        }
+
+        // Start loading task
+        xTaskCreate(
+            touchpad_load_task,
+            "bg_touchpad",
+            BG_LOAD_TASK_STACK_SIZE,
+            NULL,
+            BG_LOAD_TASK_PRIORITY,
+            &s_touchpad_load_task
+        );
+    }
+
+    // Check clock background
+    if (s_clock_state == UI_BG_STATE_PENDING && s_clock_load_task == NULL) {
+        s_clock_state = UI_BG_STATE_LOADING;
+
+        // Show spinner on clock panel
+        if (bsp_display_lock(100)) {
+            if (ui_Panel41 && !s_clock_spinner) {
+                s_clock_spinner = create_spinner_overlay(ui_Panel41);
+            }
+            bsp_display_unlock();
+        }
+
+        // Start loading task
+        xTaskCreate(
+            clock_load_task,
+            "bg_clock",
+            BG_LOAD_TASK_STACK_SIZE,
+            NULL,
+            BG_LOAD_TASK_PRIORITY,
+            &s_clock_load_task
+        );
+    }
+}
+
+// ============================================================================
+// Refresh Support
+// ============================================================================
 
 void ui_bg_refresh_if_needed(void)
 {

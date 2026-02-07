@@ -16,21 +16,69 @@ extern "C" {
 #endif
 
 /**
- * @brief Apply background image to all touchpad panels
+ * @brief Background loading state
+ */
+typedef enum {
+    UI_BG_STATE_NONE,      /**< No background set */
+    UI_BG_STATE_PENDING,   /**< Path set, waiting to load */
+    UI_BG_STATE_LOADING,   /**< Loading in progress */
+    UI_BG_STATE_READY,     /**< Loaded and ready */
+} ui_bg_state_t;
+
+/**
+ * @brief Set touchpad background path (deferred loading)
+ *
+ * Only saves the path. Actual loading happens when screen is displayed.
+ *
+ * @param[in] path Full path to image file, or NULL to clear
+ */
+void ui_bg_set_touchpad_path(const char *path);
+
+/**
+ * @brief Set clock background path (deferred loading)
+ *
+ * Only saves the path. Actual loading happens when screen is displayed.
+ *
+ * @param[in] path Full path to image file, or NULL to clear
+ */
+void ui_bg_set_clock_path(const char *path);
+
+/**
+ * @brief Check and start loading backgrounds if needed
+ *
+ * Call this when navigating to a screen that needs background.
+ * Shows spinner during loading.
+ */
+void ui_bg_check_and_load(void);
+
+/**
+ * @brief Get touchpad background loading state
+ */
+ui_bg_state_t ui_bg_get_touchpad_state(void);
+
+/**
+ * @brief Get clock background loading state
+ */
+ui_bg_state_t ui_bg_get_clock_state(void);
+
+/**
+ * @brief Apply background image to all touchpad panels (immediate)
  *
  * Sets the same background image on JPKeyboard, AtoZ, and Cursor
  * screen touchpad panels.
  *
  * @param[in] path Full path to image file, or NULL to clear
  * @return ESP_OK on success
+ * @note Prefer ui_bg_set_touchpad_path() for deferred loading
  */
 esp_err_t ui_bg_apply_to_touchpad(const char *path);
 
 /**
- * @brief Apply background image to analog clock
+ * @brief Apply background image to analog clock (immediate)
  *
  * @param[in] path Full path to image file, or NULL to use default
  * @return ESP_OK on success
+ * @note Prefer ui_bg_set_clock_path() for deferred loading
  */
 esp_err_t ui_bg_apply_to_clock(const char *path);
 
