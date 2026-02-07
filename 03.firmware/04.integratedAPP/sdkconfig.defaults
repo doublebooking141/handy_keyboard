@@ -156,8 +156,12 @@ CONFIG_BSP_I2C_CLK_SPEED_HZ=400000
 # 9. LVGL Core Configuration
 # =============================================================================
 
-# Color depth: 32bit ARGB8888 (recommended for ESP32-P4 MIPI-DSI)
+# Color depth: 32bit ARGB8888 (matches keyboard_2025 for best performance)
 CONFIG_LV_COLOR_DEPTH_32=y
+
+# Refresh period: 33ms for ~30 FPS LVGL (reduces lock contention with MJPEG)
+# keyboard_2025 uses this setting and achieves 38 FPS MJPEG playback
+CONFIG_LV_DEF_REFR_PERIOD=33
 
 # Memory: Use CLIB malloc for PSRAM support
 CONFIG_LV_USE_CLIB_MALLOC=y
@@ -205,7 +209,8 @@ CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_USE_GIF=y
 CONFIG_LV_USE_LODEPNG=y
 CONFIG_LV_USE_BMP=y
-CONFIG_LV_USE_TJPGD=y
+# CONFIG_LV_USE_TJPGD is not set
+# Note: MJPEG player uses ESP32-P4 hardware JPEG decoder directly, not LVGL's TJPGD
 
 # External library decoders - DISABLED (not available)
 CONFIG_LV_USE_LIBPNG=n
